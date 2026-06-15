@@ -130,6 +130,9 @@ int main()
 	constexpr uint32_t indNum = sizeof(indices) / sizeof(uint32_t);
 
 	float time = 0.0f;
+
+	initializeTerminal();
+
 	while (true)
 	{
 		for (int x = -2; x <= 2; x++)
@@ -166,5 +169,6 @@ int main()
 		time += 0.032f;
 	}
 
+	restoreTerminal();
     return 0;
 }
