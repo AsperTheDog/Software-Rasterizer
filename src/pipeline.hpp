@@ -14,8 +14,11 @@ private:
 
 struct PipelineState
 {
+    enum class CullMode { None, Front, Back };
+
     bool depthTest;
     bool depthWrite;
+	CullMode cullMode = CullMode::Back;
 };
 
 template<typename P, typename Uniform, typename VInput, typename VOutputStruct>

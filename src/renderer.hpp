@@ -27,10 +27,10 @@ public:
 		initTiles();
 	}
 
-	float getVertexTime() const { return vertexTime; }
-	float getBinningTime() const { return binningTime; }
-	float getFragmentTime() const { return fragmentTime; }
-	float getFrameTime() const { return frameTime; }
+	[[nodiscard]] float getVertexTime() const { return vertexTime; }
+	[[nodiscard]] float getBinningTime() const { return binningTime; }
+	[[nodiscard]] float getFragmentTime() const { return fragmentTime; }
+	[[nodiscard]] float getFrameTime() const { return frameTime; }
 
 private:
 	enum class Phase: uint8_t { Idle, Vertex, Binning, Fragment, Shutdown };

@@ -29,11 +29,13 @@ set(SDL3_LIB_DIR "" CACHE PATH "Path to the SDL3 'lib/x64' (or x86) directory co
 add_executable(SoftwareRasterizer 
     src/main.cpp 
     src/renderer.cpp
+    src/camera.cpp
     
     src/command_buffer.hpp
     src/pipeline.hpp
     src/present.hpp
     src/renderer.hpp
+    src/camera.hpp
 )
 
 target_include_directories(SoftwareRasterizer PRIVATE ${GLM_INCLUDE_DIR})

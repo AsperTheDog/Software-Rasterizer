@@ -22,8 +22,7 @@ public:
 		void(*interpolationShader)(void* outVertexOutput, const void* v1, const void* v2, const void* v3, glm::vec3 barycentrics, const void* uniform);
 		glm::vec4(*fragmentShader)(const void* vertexOutput, const void* uniform);
 		glm::vec4(*blendShader)(const glm::vec4* src, const glm::vec4* dst);
-		bool depthTest;
-		bool depthWrite;
+		PipelineState state;
 
 		uint32_t vertexStride;
 		uint32_t vOutStride;
@@ -103,8 +102,7 @@ public:
 				return P::fragmentShader(v_out, uni);
 			},
 			.blendShader = nullptr,
-			.depthTest = pipelineState.depthTest,
-			.depthWrite = pipelineState.depthWrite,
+			.state = pipelineState,
 			.vertexStride = sizeof(VInput),
 			.vOutStride = sizeof(VOutput),
 		};

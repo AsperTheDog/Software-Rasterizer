@@ -52,8 +52,20 @@ public:
 	{
 		const glm::vec3 normalizedNormal = glm::normalize(vOut->normal);
 		const float diffuse = glm::max(glm::dot(normalizedNormal, -uni->lightDirection), uni->ambientMult);
-		return {glm::vec3(diffuse) * uni->color, 1.0f};
+		return {glm::vec3(diffuse) * uni->color, 0.5f};
 	}
+
+	/*static glm::vec4 blendShader(const glm::vec4* src, const glm::vec4* dst)
+	{
+		const float srcAlpha = src->a;
+		const float invSrcAlpha = 1.0f - srcAlpha;
+
+		const glm::vec3 blendedRGB = glm::vec3(*src) * srcAlpha + glm::vec3(*dst) * invSrcAlpha;
+
+		const float blendedAlpha = srcAlpha + dst->a * invSrcAlpha;
+
+		return {blendedRGB, blendedAlpha};
+	}*/
 };
 
 int main() 
@@ -64,18 +76,12 @@ int main()
 
 	CommandBuffer commandBuffer{};
 
-	glm::vec3 camPos{ 0.0f, 0.0f, 5.0f };
-	glm::vec3 camDir{ 0.0f, 0.0f, -1.0f };
-
-	glm::mat4 viewMat = glm::lookAt(camPos, camPos + camDir, glm::vec3(0.0f, 1.0f, 0.0f));
-	glm::mat4 projMat = glm::perspective(glm::radians(70.0f), static_cast<float>(canvas.getSize().x) / canvas.getSize().y, 0.1f, 100.0f);
-
 	ColorPipeline::Uniform uniformData{
 		.lightDirection = glm::normalize(glm::vec3(1.0f, 1.0f, -1.0f)),
 		.ambientMult = 0.1f
 	};
 
-	constexpr PipelineState state{ .depthTest = true, .depthWrite = true };
+	constexpr PipelineState state{ .depthTest = true, .depthWrite = true, .cullMode = PipelineState::CullMode::Back };
 	CommandBufferRecording<ColorPipeline, ColorPipeline::Uniform, ColorPipeline::VIn, ColorPipeline::Vout> recording{ state };
 	recording.reserve(5 * 5 * 5, 5 * 5 * 5);
 
@@ -133,13 +139,21 @@ int main()
 
 	initializeTerminal();
 
-	while (true)
+	Camera cam{ { 0.0f, 0.0f, 5.0f }, { 0.0f, 0.0f, -1.0f }};
+	cam.setScreenSize(canvas.getSize().x, canvas.getSize().y);
+	canvas.toggleMouseCaptured();
+	cam.setMouseCaptured(true);
+
+	while (canvas.isOpen())
 	{
-		for (int x = -2; x <= 2; x++)
+		canvas.processInput(cam);
+		cam.updateEvents(renderer.getFrameTime() / 1000.f);
+
+		for (int z = 0; z <= 4; z++)
 		{
-			for (int y = -2; y <= 2; y++)
+			for (int x = -2; x <= 2; x++)
 			{
-				for (int z = 0; z <= 4; z++)
+				for (int y = -2; y <= 2; y++)
 				{
 					glm::mat4 modelMat = glm::translate(glm::vec3(static_cast<float>(x) * 3.f, static_cast<float>(y) * 3.f, -4.f - static_cast<float>(z) * 3.f));
 					modelMat = glm::rotate(modelMat, glm::radians(time * 50.0f), glm::vec3(0.0f, 1.0f, 0.0f));
@@ -147,7 +161,7 @@ int main()
 
 					glm::mat4 normalMat = glm::transpose(glm::inverse(modelMat));
 
-					uniformData.modelViewProjectionMatrix = projMat * viewMat * modelMat;
+					uniformData.modelViewProjectionMatrix = cam.getVPMatrix() * modelMat;
 					uniformData.normalMatrix = normalMat;
 					uniformData.color = glm::vec3(static_cast<float>(x + 2) / 5.0f, static_cast<float>(y + 2) / 5.0f, static_cast<float>(z) / 5.0f);
 
@@ -163,7 +177,7 @@ int main()
 		commandBuffer.clear();
 		recording.clear();
 		
-		canvas.present(renderer.getVertexTime(), renderer.getBinningTime(), renderer.getFragmentTime(), renderer.getFrameTime());
+		canvas.present(renderer.getVertexTime(), renderer.getBinningTime(), renderer.getFragmentTime(), renderer.getFrameTime(), cam);
 		canvas.clear();
 
 		time += renderer.getFrameTime() / 1000.0f;

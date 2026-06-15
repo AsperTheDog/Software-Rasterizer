@@ -26,6 +26,11 @@ void Renderer::execute(const CommandBuffer& commandBuffer)
 {
 	assert(framebuffer != nullptr && "Framebuffer is not initialized");
 
+	const auto start = std::chrono::high_resolution_clock::now();
+	vertexTime = 0.0f;
+	binningTime = 0.0f;
+	fragmentTime = 0.0f;
+
 	for (const CommandBuffer::DrawCallBatchCommand& command : commandBuffer.commands)
 	{
 		currentCommandBatch = &command;
@@ -48,8 +53,6 @@ void Renderer::execute(const CommandBuffer& commandBuffer)
 			tile.count.store(0, std::memory_order_relaxed);
 		}
 
-		auto start = std::chrono::high_resolution_clock::now();
-
 		// 2. Execute VERTEX Phase
 		currentPhase.store(Phase::Vertex, std::memory_order_release);
 		phaseBarrier.arrive_and_wait();
@@ -71,15 +74,17 @@ void Renderer::execute(const CommandBuffer& commandBuffer)
 
 		std::chrono::time_point<std::chrono::steady_clock> fragmentEnd = std::chrono::high_resolution_clock::now();
 
-		vertexTime = std::chrono::duration<float, std::milli>(vertexEnd - start).count();
-		binningTime = std::chrono::duration<float, std::milli>(binningEnd - vertexEnd).count();
-		fragmentTime = std::chrono::duration<float, std::milli>(fragmentEnd - binningEnd).count();
-
-		frameTime = std::chrono::duration<float, std::milli>(fragmentEnd - prevFrame).count();
-		prevFrame = fragmentEnd;
+		vertexTime += std::chrono::duration<float, std::milli>(vertexEnd - start).count();
+		binningTime += std::chrono::duration<float, std::milli>(binningEnd - vertexEnd).count();
+		fragmentTime += std::chrono::duration<float, std::milli>(fragmentEnd - binningEnd).count();
 
 		currentPhase.store(Phase::Idle, std::memory_order_release);
 	}
+
+	const std::chrono::time_point<std::chrono::steady_clock> frameEnd = std::chrono::high_resolution_clock::now();
+
+	frameTime = std::chrono::duration<float, std::milli>(frameEnd - prevFrame).count();
+	prevFrame = frameEnd;
 }
 
 void Renderer::threadRun(const std::stop_token& stopToken, const uint32_t threadID)
@@ -203,6 +208,32 @@ void Renderer::threadRunVertex(const uint32_t threadID) {
 	}
 }
 
+static bool cullTriangle(const glm::vec3& v0, const glm::vec3& v1, const glm::vec3& v2, const PipelineState::CullMode mode) noexcept
+{
+	if (mode == PipelineState::CullMode::None) 
+	{
+		return false;
+	}
+
+	const float crossZ = (v1.x - v0.x) * (v2.y - v0.y) - (v1.y - v0.y) * (v2.x - v0.x);
+
+	if (std::abs(crossZ) < 1e-6f) 
+	{
+		return true;
+	}
+
+	if (mode == PipelineState::CullMode::Back) 
+	{
+		return crossZ < 0.0f;
+	}
+	if (mode == PipelineState::CullMode::Front) 
+	{
+		return crossZ > 0.0f;
+	}
+
+	return false;
+}
+
 void Renderer::threadRunBinning()
 {
 	while (true)
@@ -220,6 +251,11 @@ void Renderer::threadRunBinning()
 		if (v1->position.w <= 0.0f || !std::isfinite(v1->position.w) ||
 			v2->position.w <= 0.0f || !std::isfinite(v2->position.w) ||
 			v3->position.w <= 0.0f || !std::isfinite(v3->position.w))
+		{
+			continue;
+		}
+
+		if (cullTriangle(v1->position, v2->position, v3->position, currentCommandBatch->state.cullMode))
 		{
 			continue;
 		}
@@ -313,7 +349,7 @@ void Renderer::threadRunFragment(const uint32_t threadID)
 
 					float depth = w0 * v1->position.z + w1 * v2->position.z + w2 * v3->position.z;
 					uint32_t pixelIdx = y * framesize.x + x;
-					if (currentCommandBatch->depthTest && depthBuffer[pixelIdx] <= depth)
+					if (currentCommandBatch->state.depthTest && depthBuffer[pixelIdx] <= depth)
 						continue;
 
 					void* interpolatedOutput = localVOutData.data() + static_cast<uintptr_t>(threadID) * currentCommandBatch->vOutStride;
@@ -331,7 +367,7 @@ void Renderer::threadRunFragment(const uint32_t threadID)
 						framebuffer[pixelIdx] = glm::u8vec4(glm::clamp(color, 0.0f, 1.0f) * 255.0f);
 					}
 
-					if (currentCommandBatch->depthWrite)
+					if (currentCommandBatch->state.depthWrite)
 						depthBuffer[pixelIdx] = depth;
 				}
 			}
