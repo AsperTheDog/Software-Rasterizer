@@ -40,6 +40,7 @@ void Renderer::execute(const CommandBuffer& commandBuffer)
 
 		triangleCounter.store(0, std::memory_order_relaxed);
 		binningCounter.store(0, std::memory_order_relaxed);
+		tileCounter.store(0, std::memory_order_relaxed);
 
 		for (Tile& tile : tiles)
 		{
@@ -236,21 +237,16 @@ void Renderer::threadRunBinning()
 
 void Renderer::threadRunFragment(const uint32_t threadID)
 {
-
-	const uint32_t tileCount = static_cast<uint32_t>(tiles.size());
-	const uint32_t tilesPerThread = (tileCount + cpuCount - 1) / cpuCount;
-	const uint32_t tileIdx = threadID * tilesPerThread;
-
-	if (tileIdx >= tileCount)
-		return;
-
-	const uint32_t tileNum = std::min(tilesPerThread, tileCount - tileIdx);
-
 	std::vector<BinNode> localBinNodes;
-	for (uint32_t i = 0; i < tileNum; ++i)
+	while (true)
 	{
-		Tile& tile = tiles[tileIdx + i];
-		glm::ivec2 tileCoords = glm::ivec2((tileIdx + i) % tileRowSize, (tileIdx + i) / tileRowSize) * 16;
+		const uint32_t tileIdx = tileCounter.fetch_add(1);
+
+		if (tileIdx >= tiles.size())
+			break;
+
+		Tile& tile = tiles[tileIdx];
+		glm::ivec2 tileCoords = glm::ivec2((tileIdx) % tileRowSize, (tileIdx) / tileRowSize) * 16;
 		const uint32_t triangleCount = tile.count.load(std::memory_order_acquire);
 		
 		localBinNodes.clear();

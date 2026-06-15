@@ -73,6 +73,7 @@ private:
 
 	std::atomic<uint32_t> triangleCounter{ 0 };
 	std::atomic<uint32_t> binningCounter{ 0 };
+	std::atomic<uint32_t> tileCounter{ 0 };
 
 	uint32_t cpuCount = 1;
 	std::vector<std::jthread> threads;
