@@ -48,20 +48,35 @@ void Renderer::execute(const CommandBuffer& commandBuffer)
 			tile.count.store(0, std::memory_order_relaxed);
 		}
 
+		auto start = std::chrono::high_resolution_clock::now();
+
 		// 2. Execute VERTEX Phase
 		currentPhase.store(Phase::Vertex, std::memory_order_release);
 		phaseBarrier.arrive_and_wait();
 		phaseBarrier.arrive_and_wait();
+
+		auto vertexEnd = std::chrono::high_resolution_clock::now();
 
 		// 3. Execute BINNING Phase
 		currentPhase.store(Phase::Binning, std::memory_order_release);
 		phaseBarrier.arrive_and_wait();
 		phaseBarrier.arrive_and_wait();
 
+		auto binningEnd = std::chrono::high_resolution_clock::now();
+
 		// 4. Execute FRAGMENT Phase
 		currentPhase.store(Phase::Fragment, std::memory_order_release);
 		phaseBarrier.arrive_and_wait();
 		phaseBarrier.arrive_and_wait();
+
+		std::chrono::time_point<std::chrono::steady_clock> fragmentEnd = std::chrono::high_resolution_clock::now();
+
+		vertexTime = std::chrono::duration<float, std::milli>(vertexEnd - start).count();
+		binningTime = std::chrono::duration<float, std::milli>(binningEnd - vertexEnd).count();
+		fragmentTime = std::chrono::duration<float, std::milli>(fragmentEnd - binningEnd).count();
+
+		frameTime = std::chrono::duration<float, std::milli>(fragmentEnd - prevFrame).count();
+		prevFrame = fragmentEnd;
 
 		currentPhase.store(Phase::Idle, std::memory_order_release);
 	}

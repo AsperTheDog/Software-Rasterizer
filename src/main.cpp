@@ -58,7 +58,7 @@ public:
 
 int main() 
 {
-	TerminalCanvas canvas{ 300, 150 };
+	SdlWindow canvas{ 1920, 1080 };
 	Renderer renderer{};
 	renderer.attachOutput(canvas);
 
@@ -68,7 +68,7 @@ int main()
 	glm::vec3 camDir{ 0.0f, 0.0f, -1.0f };
 
 	glm::mat4 viewMat = glm::lookAt(camPos, camPos + camDir, glm::vec3(0.0f, 1.0f, 0.0f));
-	glm::mat4 projMat = glm::perspective(glm::radians(70.0f), 800.0f / 600.0f, 0.1f, 100.0f);
+	glm::mat4 projMat = glm::perspective(glm::radians(70.0f), static_cast<float>(canvas.getSize().x) / canvas.getSize().y, 0.1f, 100.0f);
 
 	ColorPipeline::Uniform uniformData{
 		.lightDirection = glm::normalize(glm::vec3(1.0f, 1.0f, -1.0f)),
@@ -163,10 +163,10 @@ int main()
 		commandBuffer.clear();
 		recording.clear();
 		
-		canvas.present();
+		canvas.present(renderer.getVertexTime(), renderer.getBinningTime(), renderer.getFragmentTime(), renderer.getFrameTime());
 		canvas.clear();
 
-		time += 0.032f;
+		time += renderer.getFrameTime() / 1000.0f;
 	}
 
 	restoreTerminal();

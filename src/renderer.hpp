@@ -27,6 +27,11 @@ public:
 		initTiles();
 	}
 
+	float getVertexTime() const { return vertexTime; }
+	float getBinningTime() const { return binningTime; }
+	float getFragmentTime() const { return fragmentTime; }
+	float getFrameTime() const { return frameTime; }
+
 private:
 	enum class Phase: uint8_t { Idle, Vertex, Binning, Fragment, Shutdown };
 
@@ -81,5 +86,8 @@ private:
 	std::barrier<> phaseBarrier;
 
 	const CommandBuffer::DrawCallBatchCommand* currentCommandBatch = nullptr;
+
+	float vertexTime, binningTime, fragmentTime, frameTime;
+	std::chrono::time_point<std::chrono::steady_clock> prevFrame;
 };
 
