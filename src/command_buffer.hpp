@@ -4,28 +4,46 @@
 #include <span>
 
 #include "pipeline.hpp"
+#include "texture.hpp"
+
+template<Pipeline P>
+class CommandBufferRecording;
 
 class CommandBuffer 
 {
 public:
 	struct DrawCallBatchCommand 
 	{
+		struct Framebuffer
+		{
+			glm::vec4(*sample)(void* texture, const glm::uvec2& pos);
+			void(*write)(void* texture, const glm::vec4& value, const glm::uvec2& pos);
+
+			void* texture;
+		};
+
 		struct DrawCallData 
 		{
 			const void* uniform;
 			const void* vertexData;
 			const uint32_t* indexData;
+
 			uint32_t vertexCount;
 		};
 
 		void(*vertexShader)(void* outVertexOutput, const void* vertexInput, const void* uniform);
 		void(*interpolationShader)(void* outVertexOutput, const void* v1, const void* v2, const void* v3, glm::vec3 barycentrics, const void* uniform);
 		glm::vec4(*fragmentShader)(const void* vertexOutput, const void* uniform);
-		glm::vec4(*blendShader)(const glm::vec4* src, const glm::vec4* dst);
+		glm::vec4(*blendShader)(const glm::vec4& src, const glm::vec4& dst, const void* uniform);
+
 		PipelineState state;
 
 		uint32_t vertexStride;
 		uint32_t vOutStride;
+
+		Framebuffer framebuffer;
+
+		Texture<glm::vec1>* depthBuffer;
 
 		std::vector<DrawCallData> drawCalls;
 	};
@@ -38,17 +56,19 @@ public:
 private:
 	std::vector<DrawCallBatchCommand> commands;
 
-	template<typename P, typename Uniform, typename VInput, typename VOutput>
-		requires Pipeline<P, Uniform, VInput, VOutput>
+	template<Pipeline P>
 	friend class CommandBufferRecording;
 
 	friend class Renderer;
 };
 
-template<typename P, typename Uniform, typename VInput, typename VOutput>
-	requires Pipeline<P, Uniform, VInput, VOutput>
+template<Pipeline P>
 class CommandBufferRecording
 {
+	using Uniform = P::Uniform;
+	using VInput = P::VInput;
+	using VOutput = P::VOutput;
+
 public:
 	explicit CommandBufferRecording(const PipelineState state) : pipelineState(state) {}
 	
@@ -59,8 +79,8 @@ public:
 		DrawCall data{
 			.vertexData = vertexData.data(),
 			.indexData = nullptr,
+			.uniformData = &uniformDatas.back(),
 			.vertexCount = static_cast<uint32_t>(vertexData.size() / 3 * 3),
-			.uniformData = &uniformDatas.back()
 		};
 		drawCalls.push_back(data);
 	}
@@ -70,13 +90,14 @@ public:
 		DrawCall data{
 			.vertexData = vertexData.data(),
 			.indexData = indexData.data(),
+			.uniformData = &uniformDatas.back(),
 			.vertexCount = static_cast<uint32_t>(indexData.size() / 3 * 3),
-			.uniformData = &uniformDatas.back()
 		};
 		drawCalls.push_back(data);
 	}
 
-	void commit(CommandBuffer& commandBuffer) const
+	template<PixelFormat T>
+	void commit(CommandBuffer& commandBuffer, Texture<T>& framebuffer, Texture<glm::vec1>* depthBuffer = nullptr) const
 	{
 		CommandBuffer::DrawCallBatchCommand cmd{
 			.vertexShader = [](void* outVertexOutput, const void* vertexInput, const void* uniform)
@@ -95,23 +116,38 @@ public:
 				VOutput* v_out = static_cast<VOutput*>(outVertexOutput);
 				*v_out = P::interpolationShader(vertexOutput1, vertexOutput2, vertexOutput3, barycentrics, uni);
 			},
-			.fragmentShader = [](const void* vertexOutput, const void* uniform) -> glm::vec4
+			.fragmentShader = [](const void* vertexOutput, const void* uniform)-> glm::vec4
 			{
-				const VOutput* v_out = static_cast<const VOutput*>(vertexOutput);
 				const Uniform* uni = static_cast<const Uniform*>(uniform);
-				return P::fragmentShader(v_out, uni);
+				const VOutput* vertexOutputPtr = static_cast<const VOutput*>(vertexOutput);
+				return P::fragmentShader(vertexOutputPtr, uni);
 			},
 			.blendShader = nullptr,
 			.state = pipelineState,
 			.vertexStride = sizeof(VInput),
 			.vOutStride = sizeof(VOutput),
+			.framebuffer = {
+				.sample = [](void* texture, const glm::uvec2& pos) -> glm::vec4
+				{
+					Texture<T>* tex = static_cast<Texture<T>*>(texture);
+					return tex->getPixel(pos, true);
+				},
+				.write = [](void* texture, const glm::vec4& value, const glm::uvec2& pos)
+				{
+					Texture<T>* tex = static_cast<Texture<T>*>(texture);
+					tex->setPixel(pos, value);
+				},
+				.texture = &framebuffer,
+			},
+			.depthBuffer = depthBuffer,
 		};
 
 		if constexpr (HasBlendShader<P>) 
 		{
-			cmd.blendShader = [](const glm::vec4* src, const glm::vec4* dst) -> glm::vec4
+			cmd.blendShader = [](const glm::vec4& src, const glm::vec4& dst, const void* uniform)-> glm::vec4
 			{
-				return P::blendShader(src, dst);
+				const Uniform* uni = static_cast<const Uniform*>(uniform);
+				return P::blendShader(src, dst, uni);
 			};
 		}
 
@@ -146,13 +182,15 @@ private:
 	{
 		const VInput* vertexData;
 		const uint32_t* indexData;
-		uint32_t vertexCount;
-
 		const Uniform* uniformData;
+
+		uint32_t vertexCount;
 	};
 
 	PipelineState pipelineState;
 
 	std::vector<Uniform> uniformDatas{};
 	std::vector<DrawCall> drawCalls;
+
+	void* framebuffer = nullptr;
 };

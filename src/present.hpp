@@ -8,14 +8,20 @@
 #include <glm.hpp>
 
 #include "camera.hpp"
+#include "Texture.hpp"
 
 template<typename T>
-concept Output = requires(T t, float vertexTime, float binningTime, float fragmentTime, float frameTime, Camera& cam) {
+concept Output = requires(T t, Texture<glm::u8vec4>* tex, float vertexTime, float binningTime, float fragmentTime, float frameTime, Camera& cam) {
 	t.getSize() == std::declval<glm::uvec2>();
-    t.present(vertexTime, binningTime, fragmentTime, frameTime, cam);
-	t.getDepth() == std::declval<float*>();
-	t.getColor() == std::declval<glm::u8vec4*>();
-	t.clear(std::declval<glm::u8vec4>());
+    t.present(tex, vertexTime, binningTime, fragmentTime, frameTime, cam);
+};
+
+struct PerformanceData
+{
+	float vertexTime;
+	float binningTime;
+	float fragmentTime;
+	float frameTime;
 };
 
 class TerminalCanvas 
@@ -169,10 +175,6 @@ public:
             SDL_Quit();
             throw std::runtime_error("Failed to create SDL3 texture: " + std::string(SDL_GetError()));
         }
-
-        const size_t totalPixels = static_cast<size_t>(width) * height;
-        colorBuffer.resize(totalPixels, glm::u8vec4(0, 0, 0, 255));
-        depthBuffer.resize(totalPixels, 1.0f);
     }
 
     ~SdlWindow()
@@ -237,32 +239,19 @@ public:
         return size;
     }
 
-    [[nodiscard]] float* getDepth() noexcept
+    void present(Texture<glm::u8vec4>& tex, const PerformanceData& perfData, const Camera& cam) const
     {
-        return depthBuffer.data();
-    }
+        if (tex.isSwizzled())
+			throw std::runtime_error("Cannot present a swizzled texture. Please disable swizzling when creating the texture.");
 
-    [[nodiscard]] glm::u8vec4* getColor() noexcept
-    {
-        return colorBuffer.data();
-    }
-
-    void clear(const glm::u8vec4 clearColor = glm::u8vec4(0, 0, 0, 255)) noexcept
-    {
-        std::ranges::fill(colorBuffer, clearColor);
-        std::ranges::fill(depthBuffer, std::numeric_limits<float>::infinity());
-    }
-
-    void present(const float vertexTime, const float binningTime, const float fragmentTime, const float frameTime, Camera& cam) noexcept
-    {
-        const std::string perfStats = "Software Rasterizer | VS: " + std::to_string(vertexTime) +
-            "ms | Bin: " + std::to_string(binningTime) +
-            "ms | FS: " + std::to_string(fragmentTime) +
-            "ms | Frame: " + std::to_string(frameTime) + "ms" +
+        const std::string perfStats = "Software Rasterizer | VS: " + std::to_string(perfData.vertexTime) +
+            "ms | Bin: " + std::to_string(perfData.binningTime) +
+            "ms | FS: " + std::to_string(perfData.fragmentTime) +
+            "ms | Frame: " + std::to_string(perfData.frameTime) + "ms" +
             " | Camera: " + std::to_string(cam.getPosition().x) + ", " + std::to_string(cam.getPosition().y) + ", " + std::to_string(cam.getPosition().z);
         SDL_SetWindowTitle(window, perfStats.c_str());
 
-        SDL_UpdateTexture(texture, nullptr, colorBuffer.data(), static_cast<int>(size.x * sizeof(glm::u8vec4)));
+        SDL_UpdateTexture(texture, nullptr, tex.data(), static_cast<int>(size.x * sizeof(glm::u8vec4)));
 
         SDL_RenderClear(renderer);
         SDL_RenderTexture(renderer, texture, nullptr, nullptr);
@@ -295,8 +284,6 @@ private:
     SDL_Renderer* renderer = nullptr;
     SDL_Texture* texture = nullptr;
 
-    std::vector<glm::u8vec4> colorBuffer;
-    std::vector<float> depthBuffer;
     bool isWindowOpen = true;
 
     bool isMouseCaptured = false;

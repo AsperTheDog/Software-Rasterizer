@@ -3,65 +3,47 @@
 #include <concepts>
 #include <type_traits>
 
-struct VOutBase {
-    glm::vec4 position;
-
-private:
-    uint32_t drawcallID = 0;
-
-    friend class Renderer;
-};
+#include "shader_utils.hpp"
+#include "texture.hpp"
 
 struct PipelineState
 {
-    enum class CullMode { None, Front, Back };
+    enum class CullMode : uint8_t { None, Front, Back };
+    enum class DepthOp : uint8_t { Never, Less, Equal, Greater, NotEqual };
 
     bool depthTest;
     bool depthWrite;
+	DepthOp depthOp = DepthOp::Less;
+
 	CullMode cullMode = CullMode::Back;
+
+    uint32_t outputFormatSize;
+    uint32_t outputFormatNorm;
+
+    template<PixelFormat T>
+    void setFormat()
+    {
+        outputFormatSize = sizeof(T::value_type);
+        outputFormatNorm = std::is_floating_point_v<typename T::value_type>;
+    }
 };
 
-template<typename P, typename Uniform, typename VInput, typename VOutputStruct>
-concept Pipeline = std::is_empty_v<P> &&
-	std::derived_from<VOutputStruct, VOutBase> && 
-    requires (const VInput* v_in, const Uniform* uni, const VOutputStruct* in_v, glm::vec3 weights) 
+template<typename P>
+concept Pipeline = std::is_empty_v<P> && requires 
 {
-    { P::vertexShader(v_in, uni) } -> std::same_as<VOutputStruct>;
-    { P::interpolationShader(in_v, in_v, in_v, weights, uni) } -> std::same_as<VOutputStruct>;
+    typename P::Uniform;
+    typename P::VInput;
+    typename P::VOutput;
+} 
+	&& std::derived_from<typename P::VOutput, VOutBase> 
+	&& requires (const typename P::VInput* v_in, const typename P::Uniform* uni, const typename P::VOutput* in_v, glm::vec3 weights) 
+{
+    { P::vertexShader(v_in, uni) } -> std::same_as<typename P::VOutput>;
+    { P::interpolationShader(in_v, in_v, in_v, weights, uni) } -> std::same_as<typename P::VOutput>;
     { P::fragmentShader(in_v, uni) } -> std::same_as<glm::vec4>;
 };
 
 template<typename P>
-concept HasBlendShader = requires (const glm::vec4 * col) {
-    { P::blendShader(col, col) } -> std::same_as<glm::vec4>;
+concept HasBlendShader = Pipeline<P> && requires (const glm::vec4& col, const typename P::Uniform * uni) {
+    { P::blendShader(col, col, uni) } -> std::same_as<glm::vec4>;
 };
-
-namespace ShaderUtils {
-
-    template<typename T>
-    [[nodiscard]] constexpr T interpolateLinear(const T& a, const T& b, const T& c, const glm::vec3& weights)
-    {
-        return (a * weights.x) + (b * weights.y) + (c * weights.z);
-    }
-
-    template<typename T, typename V>
-    [[nodiscard]] constexpr T interpolatePerspective(const T& a, const T& b, const T& c, const glm::vec3& weights, const V* v1, const V* v2, const V* v3)
-    {
-        static_assert(std::derived_from<V, VOutBase>, "Vertices must derive from VOutBase");
-
-        const float invW1 = v1->position.w;
-        const float invW2 = v2->position.w;
-        const float invW3 = v3->position.w;
-
-        const float interpolatedInvW = (invW1 * weights.x) + (invW2 * weights.y) + (invW3 * weights.z);
-
-        if (std::abs(interpolatedInvW) < 1e-6f) [[unlikely]] 
-    	{
-            return T{};
-        }
-
-        const T attributeStep = (a * invW1 * weights.x) + (b * invW2 * weights.y) + (c * invW3 * weights.z);
-
-        return attributeStep / interpolatedInvW;
-    }
-}

@@ -24,8 +24,6 @@ Renderer::~Renderer()
 
 void Renderer::execute(const CommandBuffer& commandBuffer)
 {
-	assert(framebuffer != nullptr && "Framebuffer is not initialized");
-
 	const auto start = std::chrono::high_resolution_clock::now();
 	vertexTime = 0.0f;
 	binningTime = 0.0f;
@@ -289,6 +287,19 @@ void Renderer::threadRunBinning()
 void Renderer::threadRunFragment(const uint32_t threadID)
 {
 	std::vector<BinNode> localBinNodes;
+
+	const CommandBuffer::DrawCallBatchCommand& batch = *currentCommandBatch;
+	const CommandBuffer::DrawCallBatchCommand::Framebuffer& fb = batch.framebuffer;
+	Texture<glm::vec1>* const depthBuf = batch.depthBuffer;
+	const bool depthTest = batch.state.depthTest;
+	const bool depthWrite = batch.state.depthWrite;
+	const PipelineState::DepthOp depthOp = batch.state.depthOp;
+	const auto interpolationShader = batch.interpolationShader;
+	const auto fragmentShader = batch.fragmentShader;
+	const auto blendShader = batch.blendShader;
+	const uint32_t vOutStride = batch.vOutStride;
+	void* const localOutput = localVOutData.data() + static_cast<uintptr_t>(threadID) * vOutStride;
+
 	while (true)
 	{
 		const uint32_t tileIdx = tileCounter.fetch_add(1);
@@ -314,10 +325,10 @@ void Renderer::threadRunFragment(const uint32_t threadID)
 
 		for (const BinNode& node : localBinNodes)
 		{
-			const uint32_t triBytePos = node.triangleID * 3 * currentCommandBatch->vOutStride;
-			const VOutBase* v1 = reinterpret_cast<const VOutBase*>(&geometryScratchpad[triBytePos + 0 * currentCommandBatch->vOutStride]);
-			const VOutBase* v2 = reinterpret_cast<const VOutBase*>(&geometryScratchpad[triBytePos + 1 * currentCommandBatch->vOutStride]);
-			const VOutBase* v3 = reinterpret_cast<const VOutBase*>(&geometryScratchpad[triBytePos + 2 * currentCommandBatch->vOutStride]);
+			const uint32_t triBytePos = node.triangleID * 3 * vOutStride;
+			const VOutBase* v1 = reinterpret_cast<const VOutBase*>(&geometryScratchpad[triBytePos + 0 * vOutStride]);
+			const VOutBase* v2 = reinterpret_cast<const VOutBase*>(&geometryScratchpad[triBytePos + 1 * vOutStride]);
+			const VOutBase* v3 = reinterpret_cast<const VOutBase*>(&geometryScratchpad[triBytePos + 2 * vOutStride]);
 			
 			const glm::vec2 p1 = glm::vec2(v1->position);
 			const glm::vec2 p2 = glm::vec2(v2->position);
@@ -348,27 +359,47 @@ void Renderer::threadRunFragment(const uint32_t threadID)
 						continue;
 
 					float depth = w0 * v1->position.z + w1 * v2->position.z + w2 * v3->position.z;
-					uint32_t pixelIdx = y * framesize.x + x;
-					if (currentCommandBatch->state.depthTest && depthBuffer[pixelIdx] <= depth)
-						continue;
-
-					void* interpolatedOutput = localVOutData.data() + static_cast<uintptr_t>(threadID) * currentCommandBatch->vOutStride;
-					currentCommandBatch->interpolationShader(interpolatedOutput, v1, v2, v3, glm::vec3(w0, w1, w2), node.uniforms);
-					const glm::vec4 color = currentCommandBatch->fragmentShader(interpolatedOutput, node.uniforms);
-					if (currentCommandBatch->blendShader != nullptr)
+					if (depthTest)
 					{
-						glm::vec4 backgroundColor = glm::vec4(framebuffer[pixelIdx]) / 255.0f;
-						glm::vec4 blendedColor = currentCommandBatch->blendShader(&color, &backgroundColor);
-						glm::vec4 clampedColor = glm::clamp(blendedColor, 0.0f, 1.0f);
-						framebuffer[pixelIdx] = glm::u8vec4(clampedColor * 255.0f);
+						const float oldDepth = depthBuf->at(glm::uvec2(x, y)).x;
+						switch (depthOp)
+						{
+						case PipelineState::DepthOp::Less:
+							if (depth >= oldDepth)
+								continue;
+							break;
+						case PipelineState::DepthOp::Equal:
+							if (depth != oldDepth)
+								continue;
+							break;
+						case PipelineState::DepthOp::Greater:
+							if (depth <= oldDepth)
+								continue;
+							break;
+						case PipelineState::DepthOp::NotEqual:
+							if (depth == oldDepth)
+								continue;
+							break;
+						case PipelineState::DepthOp::Never:
+							break;
+						}
+					}
+
+					interpolationShader(localOutput, v1, v2, v3, glm::vec3(w0, w1, w2), node.uniforms);
+					glm::vec4 fragmentOutput = fragmentShader(localOutput, node.uniforms);
+					if (blendShader != nullptr)
+					{
+						glm::vec4 background = fb.sample(fb.texture, glm::uvec2(x, y));
+						glm::vec4 blendOutput = blendShader(fragmentOutput, background, node.uniforms);
+						fb.write(fb.texture, blendOutput, glm::uvec2(x, y));
 					}
 					else
 					{
-						framebuffer[pixelIdx] = glm::u8vec4(glm::clamp(color, 0.0f, 1.0f) * 255.0f);
+						fb.write(fb.texture, fragmentOutput, glm::uvec2(x, y));
 					}
 
-					if (currentCommandBatch->state.depthWrite)
-						depthBuffer[pixelIdx] = depth;
+					if (depthWrite)
+						depthBuf->at(glm::uvec2(x, y)).x = depth;
 				}
 			}
 		}

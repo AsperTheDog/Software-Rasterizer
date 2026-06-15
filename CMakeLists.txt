@@ -21,6 +21,22 @@ if(NOT GLM_INCLUDE_DIR)
     )
 endif()
 
+set(STB_IMAGE_INCLUDE_DIR "" CACHE PATH "Path to the directory containing 'stb_image.h'")
+
+if(NOT STB_IMAGE_INCLUDE_DIR)
+    find_path(STB_IMAGE_AUTO_DIR NAMES stb_image.h)
+    if(STB_IMAGE_AUTO_DIR)
+        set(STB_IMAGE_INCLUDE_DIR ${STB_IMAGE_AUTO_DIR})
+    endif()
+endif()
+
+if(NOT STB_IMAGE_INCLUDE_DIR)
+    message(FATAL_ERROR 
+        "\n[Engine Error]: stb_image.h not found! \n"
+        "Please pass -DSTB_IMAGE_INCLUDE_DIR=\"C:/path/to/folder_containing_stb_image\""
+    )
+endif()
+
 option(ENABLE_SDL_OUTPUT "Enable optional SDL3 graphical window output" OFF)
 
 set(SDL3_INCLUDE_DIR "" CACHE PATH "Path to the SDL3 'include' directory")
@@ -30,12 +46,15 @@ add_executable(SoftwareRasterizer
     src/main.cpp 
     src/renderer.cpp
     src/camera.cpp
+    src/texture.cpp
     
     src/command_buffer.hpp
     src/pipeline.hpp
     src/present.hpp
     src/renderer.hpp
     src/camera.hpp
+    src/texture.hpp
+    src/shader_utils.hpp
 )
 
 target_include_directories(SoftwareRasterizer PRIVATE ${GLM_INCLUDE_DIR})

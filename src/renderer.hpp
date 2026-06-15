@@ -17,13 +17,10 @@ public:
 
 	void execute(const CommandBuffer& commandBuffer);
 
-	template<Output T>
-	void attachOutput(T& output)
+	
+	void setFramesize(const glm::uvec2 newSize)
 	{
-		depthBuffer = output.getDepth();
-		framebuffer = output.getColor();
-		framesize = output.getSize();
-
+		framesize = newSize;
 		initTiles();
 	}
 
@@ -68,8 +65,6 @@ private:
 
 	glm::uvec2 framesize;
 
-	float* depthBuffer = nullptr;
-	glm::u8vec4* framebuffer = nullptr;
 	std::vector<uint8_t> geometryScratchpad;
 	std::vector<BinNode> binningScratchpad;
 	std::vector<uint8_t> localVOutData;
