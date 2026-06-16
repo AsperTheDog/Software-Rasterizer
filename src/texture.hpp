@@ -167,7 +167,7 @@ public:
         {
 	        if (quantize)
 	        {
-	        	const float elemSize = std::numeric_limits<typename Pixel::value_type>::max();
+	        	constexpr float elemSize = std::numeric_limits<typename Pixel::value_type>::max();
 	        	pixel = pixel / elemSize;
 	        }
         }
@@ -199,7 +199,7 @@ public:
             }
             else
             {
-                const float elemSize = std::numeric_limits<typename Pixel::value_type>::max();
+                constexpr float elemSize = std::numeric_limits<typename Pixel::value_type>::max();
                 pixels[index] = Pixel(glm::round(saturatedColor * elemSize));
             }
         }

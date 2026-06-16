@@ -2,12 +2,15 @@
 #include <cstdint>
 #include <glm.hpp>
 #include <span>
+#include <variant>
 
 #include "pipeline.hpp"
 #include "texture.hpp"
 
 template<Pipeline P>
 class CommandBufferRecording;
+
+using PipelineID = uint32_t;
 
 struct VertexArgs
 {
@@ -38,6 +41,17 @@ struct RasterArgs
 class CommandBuffer
 {
 public:
+	struct PipelineData
+	{
+		void(*vertexRange)(const VertexArgs& args);
+		void(*rasterizeTriangle)(const RasterArgs& args);
+
+		PipelineState state;
+
+		uint32_t vertexStride;
+		uint32_t vOutStride;
+	};
+
 	struct DrawCallBatchCommand
 	{
 		struct DrawCallData
@@ -50,13 +64,7 @@ public:
 			uint32_t indexCount;
 		};
 
-		void(*vertexRange)(const VertexArgs& args);
-		void(*rasterizeTriangle)(const RasterArgs& args);
-
-		PipelineState state;
-
-		uint32_t vertexStride;
-		uint32_t vOutStride;
+		PipelineData* pipelineData;
 
 		void* framebuffer;
 		Texture<glm::vec1>* depthBuffer;
@@ -64,13 +72,39 @@ public:
 		std::vector<DrawCallData> drawCalls;
 	};
 
+	struct ComputeCommand
+	{
+		struct ComputeContext 
+		{
+			glm::uvec3 numWorkGroups;
+			glm::uvec3 globalInvocationID;
+			glm::uvec3 localInvocationID;
+			glm::uvec3 workGroupID;
+		};
+
+		void(*computeShader)(const ComputeContext& ctx, const void* uniform);
+		void* uniform;
+		glm::uvec3 threads;
+		glm::uvec3 localGroupSize;
+		uint32_t totalThreads;
+	};
+
 	void clear()
 	{
 		commands.clear();
 	}
 
+	template<Pipeline P, PixelFormat T>
+	PipelineID registerPipeline(PipelineState state);
+
 private:
-	std::vector<DrawCallBatchCommand> commands;
+	using Command = std::variant<
+		DrawCallBatchCommand,
+		ComputeCommand
+	>;
+
+	std::vector<Command> commands;
+	std::vector<PipelineData> pipelines;
 
 	template<Pipeline P>
 	friend class CommandBufferRecording;
@@ -175,6 +209,19 @@ void rasterizeTriangleImpl(const RasterArgs& a)
 	}
 }
 
+template <Pipeline P, PixelFormat T>
+PipelineID CommandBuffer::registerPipeline(const PipelineState state)
+{
+	pipelines.emplace_back(
+		&vertexRangeImpl<P>,
+		&rasterizeTriangleImpl<P, T>,
+		state,
+		sizeof(typename P::VInput),
+		sizeof(typename P::VOutput)
+	);
+	return pipelines.size() - 1ull;
+}
+
 template<Pipeline P>
 class CommandBufferRecording
 {
@@ -183,7 +230,7 @@ class CommandBufferRecording
 	using VOutput = P::VOutput;
 
 public:
-	explicit CommandBufferRecording(const PipelineState state) : pipelineState(state) {}
+	explicit CommandBufferRecording(const PipelineID pipelineID) : pipelineID(pipelineID) {}
 
 	void bindUniform(const Uniform& uniform) { uniformDatas.push_back(uniform); }
 
@@ -215,13 +262,10 @@ public:
 	void commit(CommandBuffer& commandBuffer, Texture<T>& framebuffer, Texture<glm::vec1>* depthBuffer = nullptr) const
 	{
 		CommandBuffer::DrawCallBatchCommand cmd{
-			.vertexRange = &vertexRangeImpl<P>,
-			.rasterizeTriangle = &rasterizeTriangleImpl<P, T>,
-			.state = pipelineState,
-			.vertexStride = sizeof(VInput),
-			.vOutStride = sizeof(VOutput),
+			.pipelineData = &commandBuffer.pipelines[pipelineID],
 			.framebuffer = &framebuffer,
 			.depthBuffer = depthBuffer,
+			.drawCalls = {},
 		};
 
 		cmd.drawCalls.reserve(this->drawCalls.size());
@@ -236,7 +280,7 @@ public:
 			);
 		}
 
-		commandBuffer.commands.push_back(std::move(cmd));
+		commandBuffer.commands.emplace_back(std::move(cmd));
 	}
 
 	void reserve(uint32_t drawcalls, uint32_t uniforms)
@@ -261,8 +305,7 @@ private:
 		uint32_t vertexCount;
 		uint32_t indexCount;
 	};
-
-	PipelineState pipelineState;
+	PipelineID pipelineID;
 
 	std::vector<Uniform> uniformDatas{};
 	std::vector<DrawCall> drawCalls;

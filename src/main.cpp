@@ -85,7 +85,7 @@ int main()
 #ifdef SDL_OUTPUT
 	SdlWindow canvas{ 1920, 1080 };
 #else
-	TerminalCanvas canvas{ 800, 400 };
+	TerminalCanvas canvas{ 1000, 500 };
 #endif
 	Renderer renderer{};
 
@@ -118,7 +118,8 @@ int main()
 	};
 	state.setFormat<glm::u8vec4>();
 
-	CommandBufferRecording<ColorPipeline> recording{ state };
+	PipelineID ppid = commandBuffer.registerPipeline<ColorPipeline, glm::u8vec4>(state);
+	CommandBufferRecording<ColorPipeline> recording{ ppid };
 	recording.reserve(5 * 5 * 5, 5 * 5 * 5);
 
 	constexpr ColorPipeline::VIn vertices[] = {

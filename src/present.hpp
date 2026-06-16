@@ -26,7 +26,7 @@ struct PerformanceData
 
 class TerminalCanvas 
 {
-    mutable float presentTime;
+    mutable float presentTime = 0.0f;
 
 public:
 	TerminalCanvas(const uint32_t w, const uint32_t h) : width(w), height(h)

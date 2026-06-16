@@ -23,69 +23,100 @@ Renderer::~Renderer()
 	phaseBarrier.arrive_and_wait();
 }
 
+namespace
+{
+	template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
+	template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
+}
+
 void Renderer::execute(const CommandBuffer& commandBuffer)
 {
 	const auto start = std::chrono::high_resolution_clock::now();
 	vertexTime = 0.0f;
 	binningTime = 0.0f;
 	fragmentTime = 0.0f;
+	computeTime = 0.0f;
 
-	for (const CommandBuffer::DrawCallBatchCommand& command : commandBuffer.commands)
+	for (const CommandBuffer::Command& command : commandBuffer.commands)
 	{
-		currentCommandBatch = &command;
+		std::visit(overloaded {
+		[&](const CommandBuffer::DrawCallBatchCommand& arg) 
+			{
+				currentDrawCall = &arg;
 
-		uint32_t vertices = 0;
-		uint32_t triangles = 0;
-		drawInfos.clear();
-		drawInfos.reserve(currentCommandBatch->drawCalls.size());
-		for (const auto& drawCall : currentCommandBatch->drawCalls)
-		{
-			const uint32_t triCount = (drawCall.indexCount > 0 ? drawCall.indexCount : drawCall.vertexCount) / 3;
-			if (triCount > 0)
-				drawInfos.push_back({ vertices, triangles, triCount, drawCall.indexData, drawCall.uniform });
+				uint32_t vertices = 0;
+				uint32_t triangles = 0;
+				drawInfos.clear();
+				drawInfos.reserve(arg.drawCalls.size());
+				for (const auto& drawCall : arg.drawCalls)
+				{
+					const uint32_t triCount = (drawCall.indexCount > 0 ? drawCall.indexCount : drawCall.vertexCount) / 3;
+					if (triCount > 0)
+					{
+						drawInfos.push_back({
+							.vertexBase = vertices, 
+							.triBase = triangles, 
+							.triCount = triCount,
+							.indexData = drawCall.indexData, 
+							.uniform = drawCall.uniform });
+					}
 
-			vertices += drawCall.vertexCount;
-			triangles += triCount;
-		}
-		totalTriangles = triangles;
-		geometryScratchpad.resize(static_cast<size_t>(vertices) * command.vOutStride);
+					vertices += drawCall.vertexCount;
+					triangles += triCount;
+				}
+				totalTriangles = triangles;
+				geometryScratchpad.resize(static_cast<size_t>(vertices) * arg.pipelineData->vOutStride);
+				cullGeomScratchpad.resize(std::max(100000u, static_cast<uint32_t>(geometryScratchpad.size() / 9 * 3)));
 
-		triangleCounter.store(0, std::memory_order_relaxed);
-		binningCounter.store(0, std::memory_order_relaxed);
-		tileCounter.store(0, std::memory_order_relaxed);
+				triangleCounter.store(0, std::memory_order_relaxed);
+				binningCounter.store(0, std::memory_order_relaxed);
+				tileCounter.store(0, std::memory_order_relaxed);
 
-		for (Tile& tile : tiles)
-		{
-			tile.head.store(UINT32_MAX, std::memory_order_relaxed);
-			tile.count.store(0, std::memory_order_relaxed);
-		}
+				for (Tile& tile : tiles)
+				{
+					tile.head.store(UINT32_MAX, std::memory_order_relaxed);
+					tile.count.store(0, std::memory_order_relaxed);
+				}
 
-		// 2. Execute VERTEX Phase
-		currentPhase.store(Phase::Vertex, std::memory_order_release);
-		phaseBarrier.arrive_and_wait();
-		phaseBarrier.arrive_and_wait();
+				currentPhase.store(Phase::Vertex, std::memory_order_release);
+				phaseBarrier.arrive_and_wait();
+				phaseBarrier.arrive_and_wait();
 
-		auto vertexEnd = std::chrono::high_resolution_clock::now();
+				const auto vertexEnd = std::chrono::high_resolution_clock::now();
 
-		// 3. Execute BINNING Phase
-		currentPhase.store(Phase::Binning, std::memory_order_release);
-		phaseBarrier.arrive_and_wait();
-		phaseBarrier.arrive_and_wait();
+				currentPhase.store(Phase::Binning, std::memory_order_release);
+				phaseBarrier.arrive_and_wait();
+				phaseBarrier.arrive_and_wait();
 
-		auto binningEnd = std::chrono::high_resolution_clock::now();
+				const auto binningEnd = std::chrono::high_resolution_clock::now();
 
-		// 4. Execute FRAGMENT Phase
-		currentPhase.store(Phase::Fragment, std::memory_order_release);
-		phaseBarrier.arrive_and_wait();
-		phaseBarrier.arrive_and_wait();
+				currentPhase.store(Phase::Fragment, std::memory_order_release);
+				phaseBarrier.arrive_and_wait();
+				phaseBarrier.arrive_and_wait();
 
-		std::chrono::time_point<std::chrono::steady_clock> fragmentEnd = std::chrono::high_resolution_clock::now();
+				const std::chrono::time_point<std::chrono::steady_clock> fragmentEnd = std::chrono::high_resolution_clock::now();
 
-		vertexTime += std::chrono::duration<float, std::milli>(vertexEnd - start).count();
-		binningTime += std::chrono::duration<float, std::milli>(binningEnd - vertexEnd).count();
-		fragmentTime += std::chrono::duration<float, std::milli>(fragmentEnd - binningEnd).count();
+				vertexTime += std::chrono::duration<float, std::milli>(vertexEnd - start).count();
+				binningTime += std::chrono::duration<float, std::milli>(binningEnd - vertexEnd).count();
+				fragmentTime += std::chrono::duration<float, std::milli>(fragmentEnd - binningEnd).count();
 
-		currentPhase.store(Phase::Idle, std::memory_order_release);
+				currentPhase.store(Phase::Idle, std::memory_order_release);
+			},
+			[&](const CommandBuffer::ComputeCommand& arg)
+			{
+				currentComputeCall = &arg;
+
+				computeCounter.store(0, std::memory_order_relaxed);
+
+				currentPhase.store(Phase::Compute, std::memory_order_release);
+				phaseBarrier.arrive_and_wait();
+				phaseBarrier.arrive_and_wait();
+
+				const auto computeEnd = std::chrono::high_resolution_clock::now();
+
+				computeTime += std::chrono::duration<float, std::milli>(computeEnd - start).count();
+			}
+		}, command);
 	}
 
 	const std::chrono::time_point<std::chrono::steady_clock> frameEnd = std::chrono::high_resolution_clock::now();
@@ -115,6 +146,9 @@ void Renderer::threadRun(const std::stop_token& stopToken, const uint32_t thread
 		case Phase::Fragment:
 			threadRunFragment();
 			break;
+		case Phase::Compute:
+			threadRunCompute();
+			break;
 		case Phase::Idle:
 		case Phase::Shutdown:
 			break;
@@ -126,7 +160,7 @@ void Renderer::threadRun(const std::stop_token& stopToken, const uint32_t thread
 
 void Renderer::threadRunVertex(const uint32_t threadID) {
 	uint32_t totalVertices = 0;
-	for (const CommandBuffer::DrawCallBatchCommand::DrawCallData& drawCall : currentCommandBatch->drawCalls)
+	for (const CommandBuffer::DrawCallBatchCommand::DrawCallData& drawCall : currentDrawCall->drawCalls)
 	{
 		totalVertices += drawCall.vertexCount;
 	}
@@ -140,21 +174,24 @@ void Renderer::threadRunVertex(const uint32_t threadID) {
 
 	uint32_t dcIdx = 0;
 	uint32_t dcStartVertices = 0;
-	while (dcIdx < currentCommandBatch->drawCalls.size() && vertIdx >= dcStartVertices + currentCommandBatch->drawCalls[dcIdx].vertexCount)
+	while (dcIdx < currentDrawCall->drawCalls.size() && vertIdx >= dcStartVertices + currentDrawCall->drawCalls[dcIdx].vertexCount)
 	{
-		dcStartVertices += currentCommandBatch->drawCalls[dcIdx].vertexCount;
+		dcStartVertices += currentDrawCall->drawCalls[dcIdx].vertexCount;
 		dcIdx++;
 	}
 
 	uint32_t currentIdx = vertIdx;
 	uint32_t remainingVertices = vertNum;
 
-	const size_t vertexStride = currentCommandBatch->vertexStride;
-	const size_t vOutStride = currentCommandBatch->vOutStride;
+	const std::vector<CommandBuffer::DrawCallBatchCommand::DrawCallData> drawCalls = currentDrawCall->drawCalls;
+	const size_t vertexStride = currentDrawCall->pipelineData->vertexStride;
+	const size_t vOutStride = currentDrawCall->pipelineData->vOutStride;
 
-	while (remainingVertices > 0 && dcIdx < currentCommandBatch->drawCalls.size())
+	const auto vertexRange = currentDrawCall->pipelineData->vertexRange;
+
+	while (remainingVertices > 0 && dcIdx < drawCalls.size())
 	{
-		const auto& drawCall = currentCommandBatch->drawCalls[dcIdx];
+		const auto& drawCall = drawCalls[dcIdx];
 
 		const uint32_t localIdx = currentIdx - dcStartVertices;
 		const uint32_t verticesToProcess = std::min(remainingVertices, drawCall.vertexCount - localIdx);
@@ -171,7 +208,7 @@ void Renderer::threadRunVertex(const uint32_t threadID) {
 			.framesize = framesize
 		};
 
-		currentCommandBatch->vertexRange(args);
+		vertexRange(args);
 
 		currentIdx += verticesToProcess;
 		remainingVertices -= verticesToProcess;
@@ -208,7 +245,7 @@ static bool cullTriangle(const glm::vec3& v0, const glm::vec3& v1, const glm::ve
 
 void Renderer::threadRunBinning()
 {
-	const uint32_t vOutStride = currentCommandBatch->vOutStride;
+	const uint32_t vOutStride = currentDrawCall->pipelineData->vOutStride;
 
 	while (true)
 	{
@@ -255,7 +292,7 @@ void Renderer::threadRunBinning()
 			continue;
 		}
 
-		if (cullTriangle(v1->position, v2->position, v3->position, currentCommandBatch->state.cullMode))
+		if (cullTriangle(v1->position, v2->position, v3->position, currentDrawCall->pipelineData->state.cullMode))
 		{
 			continue;
 		}
@@ -293,8 +330,8 @@ void Renderer::threadRunFragment()
 {
 	std::vector<BinNode> localBinNodes;
 
-	const CommandBuffer::DrawCallBatchCommand& batch = *currentCommandBatch;
-	const uint32_t vOutStride = batch.vOutStride;
+	const CommandBuffer::DrawCallBatchCommand& batch = *currentDrawCall;
+	const uint32_t vOutStride = batch.pipelineData->vOutStride;
 
 	while (true)
 	{
@@ -318,6 +355,9 @@ void Renderer::threadRunFragment()
 		}
 
 		std::ranges::sort(localBinNodes, [](const BinNode& a, const BinNode& b) { return a.triangleID < b.triangleID; });
+
+		PipelineState& state = batch.pipelineData->state;
+		auto rasterize = batch.pipelineData->rasterizeTriangle;
 
 		for (const BinNode& node : localBinNodes)
 		{
@@ -349,10 +389,40 @@ void Renderer::threadRunFragment()
 				.start = start,
 				.end = end,
 				.invArea = 1.0f / triangleArea,
-				.state = batch.state,
+				.state = state,
 			};
-			batch.rasterizeTriangle(args);
+			rasterize(args);
 		}
+	}
+}
+
+void Renderer::threadRunCompute() {
+	while (true)
+	{
+		const uint32_t nextCompute = computeCounter.fetch_add(1);
+
+		if (currentComputeCall->totalThreads <= nextCompute)
+			break;
+
+		const glm::uvec3 numWorkGroups = currentComputeCall->threads;
+		const glm::uvec3 localGroupSize = currentComputeCall->localGroupSize;
+
+		const glm::uvec3 totalGlobalThreads = numWorkGroups * localGroupSize;
+
+		glm::uvec3 globalInvocationID{
+			nextCompute % totalGlobalThreads.x,
+			(nextCompute / totalGlobalThreads.x) % totalGlobalThreads.y,
+			nextCompute / (totalGlobalThreads.x * totalGlobalThreads.y)
+		};
+
+		CommandBuffer::ComputeCommand::ComputeContext ctx{
+			.numWorkGroups = numWorkGroups,
+			.globalInvocationID = globalInvocationID,
+			.localInvocationID = globalInvocationID % localGroupSize,
+			.workGroupID = globalInvocationID / localGroupSize
+		};
+
+		currentComputeCall->computeShader(ctx, currentComputeCall->uniform);
 	}
 }
 
