@@ -88,6 +88,7 @@ int main()
 	Texture<glm::vec1> depthTexture{ canvas.getSize(), glm::vec1(std::numeric_limits<float>::infinity()) };
 	Texture<glm::u8vec4> colorTexture{ canvas.getSize(), glm::u8vec4(0, 0, 0, 255), false };
 	renderer.setFramesize(canvas.getSize());
+	colorTexture.setFormat(SRGB);
 
 	CommandBuffer commandBuffer{};
 
@@ -175,8 +176,8 @@ int main()
 
 	while (canvas.isOpen())
 	{
-		//canvas.processInput(cam);
-		//cam.updateEvents(renderer.getFrameTime() / 1000.f);
+		canvas.processInput(cam);
+		cam.updateEvents(renderer.getFrameTime() / 1000.f);
 
 		for (int z = 0; z <= 4; z++)
 		{
@@ -192,9 +193,8 @@ int main()
 
 					uniformData.modelViewProjectionMatrix = cam.getVPMatrix() * modelMat;
 					uniformData.normalMatrix = normalMat;
-					//uniformData.color = glm::vec3(static_cast<float>(x + 2) / 5.0f, static_cast<float>(y + 2) / 5.0f, 1 - (static_cast<float>(z) / 5.0f));
-					uniformData.color = glm::vec3(1.0f, 1.0f, 1.0f);
-
+					uniformData.color = glm::vec3(static_cast<float>(x + 2) / 5.0f, static_cast<float>(y + 2) / 5.0f, 1 - (static_cast<float>(z) / 5.0f));
+					
 					recording.bindUniform(uniformData);
 					recording.drawIndexed({ vertices, vertNum }, { indices, indNum });
 				}

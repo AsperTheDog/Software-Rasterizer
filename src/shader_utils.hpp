@@ -1,13 +1,9 @@
 #pragma once
 #include <glm.hpp>
+#include <gtc/color_space.hpp>
 
 struct VOutBase {
     glm::vec4 position;
-
-private:
-    uint32_t drawcallID = 0;
-
-    friend class Renderer;
 };
 
 namespace ShaderUtils {
@@ -41,11 +37,11 @@ namespace ShaderUtils {
 
     [[nodiscard]] inline glm::vec4 srgbToLinear(const glm::vec4& srgbColor) noexcept
     {
-        return { glm::pow(glm::vec3(srgbColor), glm::vec3(2.2f)), srgbColor.a };
+        return glm::convertSRGBToLinear(srgbColor);
     }
 
     [[nodiscard]] inline glm::vec4 linearToSrgb(const glm::vec4& linearColor) noexcept
     {
-        return { glm::pow(glm::vec3(linearColor), glm::vec3(1.0f / 2.2f)), linearColor.a };
+        return glm::convertLinearToSRGB(linearColor);
     }
 }

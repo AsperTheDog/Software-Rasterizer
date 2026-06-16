@@ -118,61 +118,46 @@ public:
                 x = static_cast<uint32_t>(uv.x * size.x) % size.x;
                 y = static_cast<uint32_t>(uv.y * size.y) % size.y;
             }
-            return normalizePixel(pixels[getPixelIndex({ x, y })], normalized);
+            return decodeSample(pixels[getPixelIndex({ x, y })], normalized);
+        }
+
+        const float u = uv.x * size.x - 0.5f;
+        const float v = uv.y * size.y - 0.5f;
+
+        const int x0 = static_cast<int>(std::floor(u));
+        const int y0 = static_cast<int>(std::floor(v));
+
+        const int x1 = x0 + 1;
+        const int y1 = y0 + 1;
+
+        const float wx = u - std::floor(u);
+        const float wy = v - std::floor(v);
+
+        uint32_t px0, px1, py0, py1;
+
+        if (border == CLAMP)
+        {
+            px0 = glm::clamp(x0, 0, static_cast<int>(size.x - 1));
+            px1 = glm::clamp(x1, 0, static_cast<int>(size.x - 1));
+            py0 = glm::clamp(y0, 0, static_cast<int>(size.y - 1));
+            py1 = glm::clamp(y1, 0, static_cast<int>(size.y - 1));
         }
         else
         {
-            const float u = uv.x * size.x - 0.5f;
-            const float v = uv.y * size.y - 0.5f;
-
-            const int x0 = static_cast<int>(std::floor(u));
-            const int y0 = static_cast<int>(std::floor(v));
-
-            const int x1 = x0 + 1;
-            const int y1 = y0 + 1;
-
-            const float wx = u - std::floor(u);
-            const float wy = v - std::floor(v);
-
-            uint32_t px0, px1, py0, py1;
-
-            if (border == CLAMP)
-            {
-                px0 = glm::clamp(x0, 0, static_cast<int>(size.x - 1));
-                px1 = glm::clamp(x1, 0, static_cast<int>(size.x - 1));
-                py0 = glm::clamp(y0, 0, static_cast<int>(size.y - 1));
-                py1 = glm::clamp(y1, 0, static_cast<int>(size.y - 1));
-            }
-            else
-            {
-                px0 = (x0 % static_cast<int>(size.x) + size.x) % size.x;
-                px1 = (x1 % static_cast<int>(size.x) + size.x) % size.x;
-                py0 = (y0 % static_cast<int>(size.y) + size.y) % size.y;
-                py1 = (y1 % static_cast<int>(size.y) + size.y) % size.y;
-            }
-
-            const glm::vec4 c00 = pixels[getPixelIndex({ px0, py0 })];
-            const glm::vec4 c10 = pixels[getPixelIndex({ px1, py0 })];
-            const glm::vec4 c01 = pixels[getPixelIndex({ px0, py1 })];
-            const glm::vec4 c11 = pixels[getPixelIndex({ px1, py1 })];
-
-            const glm::vec4 top = glm::mix(c00, c10, wx);
-            const glm::vec4 bottom = glm::mix(c01, c11, wx);
-            const glm::vec4 color = glm::mix(top, bottom, wy);
-
-            if constexpr (!std::is_floating_point_v<typename Pixel::value_type>)
-            {
-	            if (normalized)
-	            {
-                    const float elemSize = std::numeric_limits<typename Pixel::value_type>::max();
-					return color / elemSize;
-				}
-            }
-
-            return color;
+            px0 = (x0 % static_cast<int>(size.x) + size.x) % size.x;
+            px1 = (x1 % static_cast<int>(size.x) + size.x) % size.x;
+            py0 = (y0 % static_cast<int>(size.y) + size.y) % size.y;
+            py1 = (y1 % static_cast<int>(size.y) + size.y) % size.y;
         }
 
-        return glm::vec4(0);
+        const glm::vec4 c00 = decodeSample(glm::vec4(pixels[getPixelIndex({ px0, py0 })]), normalized);
+        const glm::vec4 c10 = decodeSample(glm::vec4(pixels[getPixelIndex({ px1, py0 })]), normalized);
+        const glm::vec4 c01 = decodeSample(glm::vec4(pixels[getPixelIndex({ px0, py1 })]), normalized);
+        const glm::vec4 c11 = decodeSample(glm::vec4(pixels[getPixelIndex({ px1, py1 })]), normalized);
+
+        const glm::vec4 top = glm::mix(c00, c10, wx);
+        const glm::vec4 bottom = glm::mix(c01, c11, wx);
+        return glm::mix(top, bottom, wy);
     }
 
     glm::vec4 getPixel(const glm::uvec2 coords, const bool quantize = true)
@@ -186,6 +171,9 @@ public:
 	        	pixel = pixel / elemSize;
 	        }
         }
+
+        if (quantize && format == SRGB)
+            pixel = ShaderUtils::srgbToLinear(pixel);
 		return pixel;
     }
 
@@ -226,9 +214,6 @@ public:
 		return pixels.data();
 	}
 
-	// Direct, swizzle-aware element access. Skips the glm::vec4 round-trip and the
-	// clamp/quantize/format work in getPixel/setPixel - intended for hot paths such
-	// as the depth buffer where the stored type is already what the caller wants.
 	[[nodiscard]] Pixel& at(const glm::uvec2 coord) { return pixels[getPixelIndex(coord)]; }
 	[[nodiscard]] const Pixel& at(const glm::uvec2 coord) const { return pixels[getPixelIndex(coord)]; }
 
@@ -253,6 +238,14 @@ private:
         if constexpr (!std::is_floating_point_v<typename Pixel::value_type>)
             if (normalized)
                 return color / static_cast<float>(std::numeric_limits<typename Pixel::value_type>::max());
+        return color;
+    }
+
+    [[nodiscard]] glm::vec4 decodeSample(glm::vec4 color, const bool normalized) const
+    {
+        color = normalizePixel(color, normalized);
+        if (normalized && format == SRGB)
+            color = ShaderUtils::srgbToLinear(color);
         return color;
     }
 

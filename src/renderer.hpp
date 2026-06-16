@@ -35,7 +35,16 @@ private:
 	struct BinNode {
 		uint32_t triangleID;
 		uint32_t next;
+		uint32_t v[3];
 		const void* uniforms;
+	};
+
+	struct DrawInfo {
+		uint32_t vertexBase;
+		uint32_t triBase;
+		uint32_t triCount;
+		const uint32_t* indexData;
+		const void* uniform;
 	};
 
 	struct Tile {
@@ -59,7 +68,7 @@ private:
 	void threadRun(const std::stop_token& stopToken, uint32_t threadID);
 	void threadRunVertex(uint32_t threadID);
 	void threadRunBinning();
-	void threadRunFragment(uint32_t threadID);
+	void threadRunFragment();
 
 	void initTiles();
 
@@ -67,9 +76,11 @@ private:
 
 	std::vector<uint8_t> geometryScratchpad;
 	std::vector<BinNode> binningScratchpad;
-	std::vector<uint8_t> localVOutData;
 	std::vector<Tile> tiles;
 	uint32_t tileRowSize = 0;
+
+	std::vector<DrawInfo> drawInfos;
+	uint32_t totalTriangles = 0;
 
 	std::atomic<uint32_t> triangleCounter{ 0 };
 	std::atomic<uint32_t> binningCounter{ 0 };

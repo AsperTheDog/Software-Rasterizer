@@ -20,6 +20,7 @@ Renderer::Renderer()
 Renderer::~Renderer()
 {
 	currentPhase.store(Phase::Shutdown);
+	phaseBarrier.arrive_and_wait();
 }
 
 void Renderer::execute(const CommandBuffer& commandBuffer)
@@ -33,12 +34,20 @@ void Renderer::execute(const CommandBuffer& commandBuffer)
 	{
 		currentCommandBatch = &command;
 
-		localVOutData.resize(static_cast<size_t>(cpuCount) * command.vOutStride);
 		uint32_t vertices = 0;
+		uint32_t triangles = 0;
+		drawInfos.clear();
+		drawInfos.reserve(currentCommandBatch->drawCalls.size());
 		for (const auto& drawCall : currentCommandBatch->drawCalls)
 		{
+			const uint32_t triCount = (drawCall.indexCount > 0 ? drawCall.indexCount : drawCall.vertexCount) / 3;
+			if (triCount > 0)
+				drawInfos.push_back({ vertices, triangles, triCount, drawCall.indexData, drawCall.uniform });
+
 			vertices += drawCall.vertexCount;
+			triangles += triCount;
 		}
+		totalTriangles = triangles;
 		geometryScratchpad.resize(static_cast<size_t>(vertices) * command.vOutStride);
 
 		triangleCounter.store(0, std::memory_order_relaxed);
@@ -104,7 +113,7 @@ void Renderer::threadRun(const std::stop_token& stopToken, const uint32_t thread
 			threadRunBinning();
 			break;
 		case Phase::Fragment:
-			threadRunFragment(threadID);
+			threadRunFragment();
 			break;
 		case Phase::Idle:
 		case Phase::Shutdown:
@@ -152,52 +161,17 @@ void Renderer::threadRunVertex(const uint32_t threadID) {
 
 		uint8_t* dstGeometryBytes = geometryScratchpad.data() + static_cast<uintptr_t>(currentIdx) * vOutStride;
 
-		if (drawCall.indexData != nullptr)
-		{
-			const uint32_t* indices = drawCall.indexData + localIdx;
-			const uint8_t* vertexBase = static_cast<const uint8_t*>(drawCall.vertexData);
+		const uint8_t* srcVertexBytes = static_cast<const uint8_t*>(drawCall.vertexData) + static_cast<uintptr_t>(localIdx) * vertexStride;
 
-			for (uint32_t i = 0; i < verticesToProcess; ++i)
-			{
-				const uint32_t actualVertexIndex = indices[i];
+		VertexArgs args{
+			.vertexInput = srcVertexBytes,
+			.uniform = drawCall.uniform,
+			.vertexOutput = dstGeometryBytes,
+			.vertexCount = verticesToProcess,
+			.framesize = framesize
+		};
 
-				const uint8_t* srcVertexBytes = vertexBase + static_cast<uintptr_t>(actualVertexIndex) * vertexStride;
-
-				currentCommandBatch->vertexShader(dstGeometryBytes, srcVertexBytes, drawCall.uniform);
-
-				VOutBase* vOut = reinterpret_cast<VOutBase*>(dstGeometryBytes);
-				vOut->drawcallID = dcIdx;
-
-				const float oneOverW = 1.0f / vOut->position.w;
-				vOut->position *= oneOverW;
-				vOut->position.x = (vOut->position.x + 1.0f) * 0.5f * static_cast<float>(framesize.x);
-				vOut->position.y = (vOut->position.y + 1.0f) * 0.5f * static_cast<float>(framesize.y);
-				vOut->position.w = oneOverW;
-
-				dstGeometryBytes += vOutStride;
-			}
-		}
-		else
-		{
-			const uint8_t* srcVertexBytes = static_cast<const uint8_t*>(drawCall.vertexData) + static_cast<uintptr_t>(localIdx) * vertexStride;
-
-			for (uint32_t i = 0; i < verticesToProcess; ++i)
-			{
-				currentCommandBatch->vertexShader(dstGeometryBytes, srcVertexBytes, drawCall.uniform);
-
-				VOutBase* vOut = reinterpret_cast<VOutBase*>(dstGeometryBytes);
-				vOut->drawcallID = dcIdx;
-
-				const float oneOverW = 1.0f / vOut->position.w;
-				vOut->position *= oneOverW;
-				vOut->position.x = (vOut->position.x + 1.0f) * 0.5f * static_cast<float>(framesize.x);
-				vOut->position.y = (vOut->position.y + 1.0f) * 0.5f * static_cast<float>(framesize.y);
-				vOut->position.w = oneOverW;
-
-				srcVertexBytes += vertexStride;
-				dstGeometryBytes += vOutStride;
-			}
-		}
+		currentCommandBatch->vertexRange(args);
 
 		currentIdx += verticesToProcess;
 		remainingVertices -= verticesToProcess;
@@ -234,17 +208,45 @@ static bool cullTriangle(const glm::vec3& v0, const glm::vec3& v1, const glm::ve
 
 void Renderer::threadRunBinning()
 {
+	const uint32_t vOutStride = currentCommandBatch->vOutStride;
+
 	while (true)
 	{
 		const uint32_t nextTri = triangleCounter.fetch_add(1);
-		const uint32_t triBytePos = nextTri * 3 * currentCommandBatch->vOutStride;
 
-		if (triBytePos >= geometryScratchpad.size())
+		if (nextTri >= totalTriangles)
 			break;
 
-		const VOutBase* v1 = reinterpret_cast<const VOutBase*>(&geometryScratchpad[triBytePos + 0 * currentCommandBatch->vOutStride]);
-		const VOutBase* v2 = reinterpret_cast<const VOutBase*>(&geometryScratchpad[triBytePos + 1 * currentCommandBatch->vOutStride]);
-		const VOutBase* v3 = reinterpret_cast<const VOutBase*>(&geometryScratchpad[triBytePos + 2 * currentCommandBatch->vOutStride]);
+		uint32_t lo = 0;
+		uint32_t hi = static_cast<uint32_t>(drawInfos.size());
+		while (lo + 1 < hi)
+		{
+			const uint32_t mid = (lo + hi) / 2;
+			if (drawInfos[mid].triBase <= nextTri)
+				lo = mid;
+			else
+				hi = mid;
+		}
+		const DrawInfo& info = drawInfos[lo];
+		const uint32_t localTri = nextTri - info.triBase;
+
+		uint32_t slot[3];
+		if (info.indexData != nullptr)
+		{
+			slot[0] = info.vertexBase + info.indexData[localTri * 3 + 0];
+			slot[1] = info.vertexBase + info.indexData[localTri * 3 + 1];
+			slot[2] = info.vertexBase + info.indexData[localTri * 3 + 2];
+		}
+		else
+		{
+			slot[0] = info.vertexBase + localTri * 3 + 0;
+			slot[1] = info.vertexBase + localTri * 3 + 1;
+			slot[2] = info.vertexBase + localTri * 3 + 2;
+		}
+
+		const VOutBase* v1 = reinterpret_cast<const VOutBase*>(&geometryScratchpad[static_cast<size_t>(slot[0]) * vOutStride]);
+		const VOutBase* v2 = reinterpret_cast<const VOutBase*>(&geometryScratchpad[static_cast<size_t>(slot[1]) * vOutStride]);
+		const VOutBase* v3 = reinterpret_cast<const VOutBase*>(&geometryScratchpad[static_cast<size_t>(slot[2]) * vOutStride]);
 
 		if (v1->position.w <= 0.0f || !std::isfinite(v1->position.w) ||
 			v2->position.w <= 0.0f || !std::isfinite(v2->position.w) ||
@@ -272,7 +274,10 @@ void Renderer::threadRunBinning()
 				const uint32_t nodeIdx = binningCounter.fetch_add(1, std::memory_order_relaxed);
 				BinNode& node = binningScratchpad[nodeIdx];
 				node.triangleID = nextTri;
-				node.uniforms = currentCommandBatch->drawCalls[v1->drawcallID].uniform;
+				node.v[0] = slot[0];
+				node.v[1] = slot[1];
+				node.v[2] = slot[2];
+				node.uniforms = info.uniform;
 
 				const uint32_t tileIdx = y * tileRowSize + x;
 				Tile& tile = tiles[tileIdx];
@@ -284,21 +289,12 @@ void Renderer::threadRunBinning()
 	}
 }
 
-void Renderer::threadRunFragment(const uint32_t threadID)
+void Renderer::threadRunFragment()
 {
 	std::vector<BinNode> localBinNodes;
 
 	const CommandBuffer::DrawCallBatchCommand& batch = *currentCommandBatch;
-	const CommandBuffer::DrawCallBatchCommand::Framebuffer& fb = batch.framebuffer;
-	Texture<glm::vec1>* const depthBuf = batch.depthBuffer;
-	const bool depthTest = batch.state.depthTest;
-	const bool depthWrite = batch.state.depthWrite;
-	const PipelineState::DepthOp depthOp = batch.state.depthOp;
-	const auto interpolationShader = batch.interpolationShader;
-	const auto fragmentShader = batch.fragmentShader;
-	const auto blendShader = batch.blendShader;
 	const uint32_t vOutStride = batch.vOutStride;
-	void* const localOutput = localVOutData.data() + static_cast<uintptr_t>(threadID) * vOutStride;
 
 	while (true)
 	{
@@ -310,10 +306,10 @@ void Renderer::threadRunFragment(const uint32_t threadID)
 		Tile& tile = tiles[tileIdx];
 		glm::ivec2 tileCoords = glm::ivec2((tileIdx) % tileRowSize, (tileIdx) / tileRowSize) * 16;
 		const uint32_t triangleCount = tile.count.load(std::memory_order_acquire);
-		
+
 		localBinNodes.clear();
 		localBinNodes.reserve(triangleCount);
-		
+
 		uint32_t nodeIdx = tile.head.load(std::memory_order_acquire);
 		while (nodeIdx != UINT32_MAX)
 		{
@@ -321,15 +317,14 @@ void Renderer::threadRunFragment(const uint32_t threadID)
 			nodeIdx = binningScratchpad[nodeIdx].next;
 		}
 
-		std::ranges::sort(localBinNodes, [this](const BinNode& a, const BinNode& b) { return a.triangleID < b.triangleID; });
+		std::ranges::sort(localBinNodes, [](const BinNode& a, const BinNode& b) { return a.triangleID < b.triangleID; });
 
 		for (const BinNode& node : localBinNodes)
 		{
-			const uint32_t triBytePos = node.triangleID * 3 * vOutStride;
-			const VOutBase* v1 = reinterpret_cast<const VOutBase*>(&geometryScratchpad[triBytePos + 0 * vOutStride]);
-			const VOutBase* v2 = reinterpret_cast<const VOutBase*>(&geometryScratchpad[triBytePos + 1 * vOutStride]);
-			const VOutBase* v3 = reinterpret_cast<const VOutBase*>(&geometryScratchpad[triBytePos + 2 * vOutStride]);
-			
+			const VOutBase* v1 = reinterpret_cast<const VOutBase*>(&geometryScratchpad[static_cast<size_t>(node.v[0]) * vOutStride]);
+			const VOutBase* v2 = reinterpret_cast<const VOutBase*>(&geometryScratchpad[static_cast<size_t>(node.v[1]) * vOutStride]);
+			const VOutBase* v3 = reinterpret_cast<const VOutBase*>(&geometryScratchpad[static_cast<size_t>(node.v[2]) * vOutStride]);
+
 			const glm::vec2 p1 = glm::vec2(v1->position);
 			const glm::vec2 p2 = glm::vec2(v2->position);
 			const glm::vec2 p3 = glm::vec2(v3->position);
@@ -341,67 +336,22 @@ void Renderer::threadRunFragment(const uint32_t threadID)
 			const glm::ivec2 end = glm::clamp(bboxMax, tileCoords, tileCoords + glm::ivec2(15));
 
 			const float triangleArea = (p2.x - p1.x) * (p3.y - p1.y) - (p2.y - p1.y) * (p3.x - p1.x);
-			if (std::abs(triangleArea) < 0.0001f) 
+			if (std::abs(triangleArea) < 0.0001f)
 				continue;
 
-			float invArea = 1.0f / triangleArea;
-
-			for (int32_t y = start.y; y <= end.y; ++y)
-			{
-				for (int32_t x = start.x; x <= end.x; ++x)
-				{
-					glm::vec2 pixelCenter = glm::vec2(static_cast<float>(x) + 0.5f, static_cast<float>(y) + 0.5f);
-					float w0 = ((p3.x - p2.x) * (pixelCenter.y - p2.y) - (p3.y - p2.y) * (pixelCenter.x - p2.x)) * invArea;
-					float w1 = ((p1.x - p3.x) * (pixelCenter.y - p3.y) - (p1.y - p3.y) * (pixelCenter.x - p3.x)) * invArea;
-					float w2 = 1.0f - w0 - w1;
-
-					if (w0 < 0.0f || w1 < 0.0f || w2 < 0.0f)
-						continue;
-
-					float depth = w0 * v1->position.z + w1 * v2->position.z + w2 * v3->position.z;
-					if (depthTest)
-					{
-						const float oldDepth = depthBuf->at(glm::uvec2(x, y)).x;
-						switch (depthOp)
-						{
-						case PipelineState::DepthOp::Less:
-							if (depth >= oldDepth)
-								continue;
-							break;
-						case PipelineState::DepthOp::Equal:
-							if (depth != oldDepth)
-								continue;
-							break;
-						case PipelineState::DepthOp::Greater:
-							if (depth <= oldDepth)
-								continue;
-							break;
-						case PipelineState::DepthOp::NotEqual:
-							if (depth == oldDepth)
-								continue;
-							break;
-						case PipelineState::DepthOp::Never:
-							break;
-						}
-					}
-
-					interpolationShader(localOutput, v1, v2, v3, glm::vec3(w0, w1, w2), node.uniforms);
-					glm::vec4 fragmentOutput = fragmentShader(localOutput, node.uniforms);
-					if (blendShader != nullptr)
-					{
-						glm::vec4 background = fb.sample(fb.texture, glm::uvec2(x, y));
-						glm::vec4 blendOutput = blendShader(fragmentOutput, background, node.uniforms);
-						fb.write(fb.texture, blendOutput, glm::uvec2(x, y));
-					}
-					else
-					{
-						fb.write(fb.texture, fragmentOutput, glm::uvec2(x, y));
-					}
-
-					if (depthWrite)
-						depthBuf->at(glm::uvec2(x, y)).x = depth;
-				}
-			}
+			const RasterArgs args{
+				.v1 = v1,
+				.v2 = v2,
+				.v3 = v3,
+				.uniform = node.uniforms,
+				.framebuffer = batch.framebuffer,
+				.depthBuffer = batch.depthBuffer,
+				.start = start,
+				.end = end,
+				.invArea = 1.0f / triangleArea,
+				.state = batch.state,
+			};
+			batch.rasterizeTriangle(args);
 		}
 	}
 }

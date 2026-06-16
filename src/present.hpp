@@ -45,7 +45,7 @@ public:
 
     void present(const float vertexTime, const float binningTime, const float fragmentTime, const float frameTime) const {
 
-		auto start = std::chrono::steady_clock::now();
+		const auto start = std::chrono::steady_clock::now();
 
         outputStrBuffer.clear();
         outputStrBuffer.append("\x1b[H");
