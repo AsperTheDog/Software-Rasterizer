@@ -29,7 +29,7 @@ class TerminalCanvas
     mutable float presentTime;
 
 public:
-	TerminalCanvas(const uint32_t w, const uint32_t h) : width(w), height(h), buffer(w* h, { 0, 0, 0, 255 }), depthBuffer(w* h, std::numeric_limits<float>::infinity())
+	TerminalCanvas(const uint32_t w, const uint32_t h) : width(w), height(h)
 	{
         outputStrBuffer.reserve(3 + (width * height * 24) + (height * 5));
     }
@@ -37,14 +37,8 @@ public:
     [[nodiscard]] uint32_t getWidth() const { return width; }
     [[nodiscard]] uint32_t getHeight() const { return height; }
 
-    void clear(const glm::u8vec4 clearColor = glm::u8vec4(0, 0, 0, 255)) 
-	{
-	    std::ranges::fill(buffer, clearColor);
-		std::ranges::fill(depthBuffer, std::numeric_limits<float>::infinity());
-    }
-
-    void present(const float vertexTime, const float binningTime, const float fragmentTime, const float frameTime) const {
-
+    void present(Texture<glm::u8vec4>& tex, const PerformanceData& perfData, const Camera& cam) const {
+        
 		const auto start = std::chrono::steady_clock::now();
 
         outputStrBuffer.clear();
@@ -61,7 +55,7 @@ public:
         {
             for (uint32_t x = 0; x < width; ++x)
             {
-                const glm::u8vec3 c = buffer[y * width + x];
+                const glm::u8vec3 c = tex.getPixel({x, y}, false);
 
                 outputStrBuffer.append("\x1b[48;2;");
                 append_num(outputStrBuffer, c.r);
@@ -77,15 +71,15 @@ public:
         outputStrBuffer.append("Timings:\n");
 		
 		outputStrBuffer.append("Vertex: ");
-        outputStrBuffer.append(std::to_string(vertexTime));
+        outputStrBuffer.append(std::to_string(perfData.vertexTime));
         outputStrBuffer.append(" ms\n");    
 
         outputStrBuffer.append("Binning: ");
-		outputStrBuffer.append(std::to_string(binningTime));
+		outputStrBuffer.append(std::to_string(perfData.binningTime));
 		outputStrBuffer.append(" ms\n");
 
         outputStrBuffer.append("Fragment: ");
-		outputStrBuffer.append(std::to_string(fragmentTime));
+		outputStrBuffer.append(std::to_string(perfData.fragmentTime));
 		outputStrBuffer.append(" ms\n");
 
         outputStrBuffer.append("Present: ");
@@ -93,10 +87,10 @@ public:
         outputStrBuffer.append(" ms\n");
 
 		outputStrBuffer.append("Frame: ");
-		outputStrBuffer.append(std::to_string(frameTime));
+		outputStrBuffer.append(std::to_string(perfData.frameTime));
 		outputStrBuffer.append(" ms\n");
         outputStrBuffer.append("FPS: ");
-		outputStrBuffer.append(std::to_string(static_cast<uint32_t>(1000.0f / frameTime)));
+		outputStrBuffer.append(std::to_string(static_cast<uint32_t>(1000.0f / perfData.frameTime)));
         outputStrBuffer.append(" fps\n");
 
         std::cout.write(outputStrBuffer.data(), outputStrBuffer.size());
@@ -110,21 +104,9 @@ public:
 		return {width, height};
     }
 
-	glm::u8vec4* getColor()
-	{
-		return buffer.data();
-	}
-
-	float* getDepth()
-	{
-		return depthBuffer.data();
-	}
-
 private:
     uint32_t width;
     uint32_t height;
-    std::vector<glm::u8vec4> buffer;
-	std::vector<float> depthBuffer;
     mutable std::string outputStrBuffer;
 };
 

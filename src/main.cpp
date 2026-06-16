@@ -82,7 +82,11 @@ public:
 
 int main() 
 {
+#ifdef SDL_OUTPUT
 	SdlWindow canvas{ 1920, 1080 };
+#else
+	TerminalCanvas canvas{ 800, 400 };
+#endif
 	Renderer renderer{};
 
 	Texture<glm::vec1> depthTexture{ canvas.getSize(), glm::vec1(std::numeric_limits<float>::infinity()) };
@@ -171,13 +175,23 @@ int main()
 
 	Camera cam{ { 0.0f, 0.0f, 5.0f }, { 0.0f, 0.0f, -1.0f }};
 	cam.setScreenSize(canvas.getSize().x, canvas.getSize().y);
+#ifdef SDL_OUTPUT
 	canvas.toggleMouseCaptured();
 	cam.setMouseCaptured(true);
+#else
+	initializeTerminal();
+#endif
 
+#ifdef SDL_OUTPUT
 	while (canvas.isOpen())
+#else
+	while (true)
+#endif
 	{
+#ifdef SDL_OUTPUT
 		canvas.processInput(cam);
 		cam.updateEvents(renderer.getFrameTime() / 1000.f);
+#endif
 
 		for (int z = 0; z <= 4; z++)
 		{
@@ -219,6 +233,10 @@ int main()
 
 		time += renderer.getFrameTime() / 1000.0f;
 	}
+
+#ifndef SDL_OUTPUT
+	restoreTerminal();
+#endif
 
     return 0;
 }
