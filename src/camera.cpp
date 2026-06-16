@@ -11,6 +11,15 @@ Camera::Camera(const glm::vec3 pos, const glm::vec3 dir, const float fov, const 
 	: m_Position(pos), m_Front(dir), m_fov(fov), m_near(near), m_far(far)
 {
 	calculateRightVector();
+	m_pitch = glm::degrees(glm::asin(m_Front.y));
+	m_yaw = glm::degrees(glm::atan(m_Front.z, m_Front.x));
+
+	m_pitch = std::min(m_pitch, 89.0f);
+	m_pitch = std::max(m_pitch, -89.0f);
+	if (m_yaw > 360.0f)
+		m_yaw -= 360.0f;
+	if (m_yaw < -360.0f)
+		m_yaw += 360.0f;
 }
 
 void Camera::move(const glm::vec3 dir)
