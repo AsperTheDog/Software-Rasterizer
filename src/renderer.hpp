@@ -18,11 +18,15 @@ public:
 	void execute(const CommandBuffer& commandBuffer);
 	void endFrame();
 	
-	void setFramesize(const glm::uvec2 newSize)
+	void setFramesize(const glm::uvec2 newSize, const uint32_t downsampleFactor = 1)
 	{
-		framesize = newSize;
+		downsample = downsampleFactor;
+		framesize = (newSize + glm::uvec2(downsampleFactor - 1u)) / downsampleFactor;
 		initTiles();
 	}
+
+	[[nodiscard]] glm::uvec2 getFramesize() const { return framesize; }
+	[[nodiscard]] uint32_t getDownsample() const { return downsample; }
 
 	[[nodiscard]] float getVertexTime() const { return vertexTime; }
 	[[nodiscard]] float getBinningTime() const { return binningTime; }
@@ -78,6 +82,7 @@ private:
 	[[nodiscard]] const VOutBase* resolveVertex(uint32_t slot, uint32_t vOutStride) const;
 
 	glm::uvec2 framesize;
+	uint32_t downsample = 1;
 
 	std::vector<uint8_t> geometryScratchpad;
 	std::vector<uint8_t> cullGeomScratchpad;

@@ -58,7 +58,7 @@ public:
 		return { diffuse * glm::vec3{tex} * uni->color, 1.0f };
 	}
 
-	static glm::vec4 blendShader(const glm::vec4& src, const glm::vec4& dst, const Uniform* uni)
+	/*static glm::vec4 blendShader(const glm::vec4& src, const glm::vec4& dst, const Uniform* uni)
 	{
 		const float srcAlpha = src.a;
 		const float invSrcAlpha = 1.0f - srcAlpha;
@@ -68,7 +68,7 @@ public:
 		const float blendedAlpha = srcAlpha + dst.a * invSrcAlpha;
 
 		return {blendedRGB, blendedAlpha};
-	}
+	}*/
 };
 
 int main() 
@@ -80,9 +80,10 @@ int main()
 #endif
 	Renderer renderer{};
 
-	Texture<glm::vec1> depthTexture{ canvas.getSize(), glm::vec1(std::numeric_limits<float>::infinity()) };
+	renderer.setFramesize(canvas.getSize(), 1);
+
+	Texture<glm::vec1> depthTexture{ renderer.getFramesize(), glm::vec1(std::numeric_limits<float>::infinity()) };
 	Texture<glm::u8vec4> colorTexture{ canvas.getSize(), glm::u8vec4(0, 0, 0, 255), false };
-	renderer.setFramesize(canvas.getSize());
 	colorTexture.setFormat(SRGB);
 
 	CommandBuffer commandBuffer{};
@@ -192,8 +193,8 @@ int main()
 				for (int y = -2; y <= 2; y++)
 				{
 					glm::mat4 modelMat = glm::translate(glm::vec3(static_cast<float>(x) * 3.f, static_cast<float>(y) * 3.f, -4.f - static_cast<float>(z) * 3.f));
-					modelMat = glm::rotate(modelMat, glm::radians(time * 5.f), glm::vec3(0.0f, 1.0f, 0.0f));
-					modelMat = glm::rotate(modelMat, glm::radians(time * 3.f), glm::vec3(1.0f, 0.0f, 0.0f));
+					modelMat = glm::rotate(modelMat, glm::radians(time * 0.f), glm::vec3(0.0f, 1.0f, 0.0f));
+					modelMat = glm::rotate(modelMat, glm::radians(time * 0.f), glm::vec3(1.0f, 0.0f, 0.0f));
 
 					glm::mat4 normalMat = glm::transpose(glm::inverse(modelMat));
 

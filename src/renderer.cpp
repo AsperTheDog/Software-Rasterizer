@@ -473,6 +473,7 @@ void Renderer::threadRunFragment()
 				.start = start,
 				.end = end,
 				.invArea = 1.0f / triangleArea,
+				.downsample = downsample,
 				.state = state,
 			};
 			rasterize(args);

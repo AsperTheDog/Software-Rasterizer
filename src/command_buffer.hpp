@@ -45,6 +45,7 @@ struct RasterArgs
 	glm::ivec2 start;
 	glm::ivec2 end;
 	float invArea;
+	uint32_t downsample;
 
 	PipelineState state;
 };
@@ -175,6 +176,9 @@ void rasterizeTriangleImpl(const RasterArgs& a)
 	Texture<T>& framebuffer = *static_cast<Texture<T>*>(a.framebuffer);
 	Texture<glm::vec1>* const depthBuffer = a.depthBuffer;
 
+	const uint32_t ds = a.downsample;
+	const glm::uvec2 outputSize = framebuffer.getSize();
+
 	const glm::vec2 p1 = glm::vec2(v1->position);
 	const glm::vec2 p2 = glm::vec2(v2->position);
 	const glm::vec2 p3 = glm::vec2(v3->position);
@@ -244,13 +248,20 @@ void rasterizeTriangleImpl(const RasterArgs& a)
 			}
 			glm::vec4 fragmentOutput = P::fragmentShader(&interpolated, uni);
 
+			const uint32_t bx0 = static_cast<uint32_t>(x) * ds;
+			const uint32_t by0 = static_cast<uint32_t>(y) * ds;
+
 			if constexpr (HasBlendShader<P>)
 			{
-				const glm::vec4 background = framebuffer.getPixel(glm::uvec2(x, y), true);
+				const glm::vec4 background = framebuffer.getPixel(glm::uvec2(bx0, by0), true);
 				fragmentOutput = P::blendShader(fragmentOutput, background, uni);
 			}
 
-			framebuffer.setPixel(glm::uvec2(x, y), fragmentOutput);
+			const uint32_t bx1 = glm::min(bx0 + ds, outputSize.x);
+			const uint32_t by1 = glm::min(by0 + ds, outputSize.y);
+			for (uint32_t by = by0; by < by1; ++by)
+				for (uint32_t bx = bx0; bx < bx1; ++bx)
+					framebuffer.setPixel(glm::uvec2(bx, by), fragmentOutput);
 
 			if (a.state.depthWrite)
 				depthBuffer->at(glm::uvec2(x, y)).x = depth;
