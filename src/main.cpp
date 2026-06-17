@@ -16,7 +16,7 @@ class ColorPipeline
 public:
 	struct UniformStruct
 	{
-		Texture<glm::u8vec4>* tex;
+		MipTexture<glm::u8vec4>* tex;
 		glm::mat4 modelViewProjectionMatrix;
 		glm::mat4 normalMatrix;
 		glm::vec3 lightDirection;
@@ -50,12 +50,17 @@ public:
 		return vOut;
 	}
 
-	static glm::vec4 fragmentShader(const VOutput* vOut, const Uniform* uni)
+	static glm::vec4 fragmentShader(const VOutput* vOut, const Uniform* uni, const float tpw)
 	{
 		const glm::vec3 normalizedNormal = glm::normalize(vOut->normal);
 		const float diffuse = glm::max(glm::dot(normalizedNormal, -uni->lightDirection), uni->ambientMult);
-		const glm::vec4 tex = uni->tex->sample(vOut->uvCoords * 2.f);
+		const glm::vec4 tex = uni->tex->sample(vOut->uvCoords, tpw, 2.f);
 		return { diffuse * glm::vec3{tex} * uni->color, 1.0f };
+	}
+
+	static glm::vec2 getUV(const VOutput* vOut)
+	{
+		return vOut->uvCoords;
 	}
 
 	/*static glm::vec4 blendShader(const glm::vec4& src, const glm::vec4& dst, const Uniform* uni)
@@ -88,8 +93,9 @@ int main()
 
 	CommandBuffer commandBuffer{};
 
-	Texture<glm::u8vec4> tex{ "../texture.png" };
-	tex.setSampler(LINEAR, REPEAT);
+	MipTexture<glm::u8vec4> tex{ "../texture.png" };
+	tex.setSampler(TRILINEAR, REPEAT);
+	//tex.toggleDebugMode();
 
 	ColorPipeline::Uniform uniformData{
 		.tex = &tex,
@@ -193,8 +199,8 @@ int main()
 				for (int y = -2; y <= 2; y++)
 				{
 					glm::mat4 modelMat = glm::translate(glm::vec3(static_cast<float>(x) * 3.f, static_cast<float>(y) * 3.f, -4.f - static_cast<float>(z) * 3.f));
-					modelMat = glm::rotate(modelMat, glm::radians(time * 0.f), glm::vec3(0.0f, 1.0f, 0.0f));
-					modelMat = glm::rotate(modelMat, glm::radians(time * 0.f), glm::vec3(1.0f, 0.0f, 0.0f));
+					modelMat = glm::rotate(modelMat, glm::radians(time * 5.f), glm::vec3(0.0f, 1.0f, 0.0f));
+					modelMat = glm::rotate(modelMat, glm::radians(time * 3.f), glm::vec3(1.0f, 0.0f, 0.0f));
 
 					glm::mat4 normalMat = glm::transpose(glm::inverse(modelMat));
 

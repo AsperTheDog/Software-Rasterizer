@@ -40,6 +40,7 @@ private:
 		uint32_t triangleID;
 		uint32_t next;
 		uint32_t v[3];
+		float tpw;
 		const void* uniforms;
 	};
 

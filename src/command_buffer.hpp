@@ -46,6 +46,7 @@ struct RasterArgs
 	glm::ivec2 end;
 	float invArea;
 	uint32_t downsample;
+	float tpw;
 
 	PipelineState state;
 };
@@ -57,6 +58,7 @@ public:
 	{
 		void(*vertexRange)(const VertexArgs& args);
 		void(*rasterizeTriangle)(const RasterArgs& args);
+		glm::vec2(*getUV)(const void* vOut);
 
 		PipelineState state;
 
@@ -246,7 +248,7 @@ void rasterizeTriangleImpl(const RasterArgs& a)
 				for (uint32_t i = skip; i < count; ++i)
 					fd[i] = fa[i] * pc0 + fb[i] * pc1 + fc[i] * pc2;
 			}
-			glm::vec4 fragmentOutput = P::fragmentShader(&interpolated, uni);
+			glm::vec4 fragmentOutput = P::fragmentShader(&interpolated, uni, a.tpw);
 
 			const uint32_t bx0 = static_cast<uint32_t>(x) * ds;
 			const uint32_t by0 = static_cast<uint32_t>(y) * ds;
@@ -275,10 +277,21 @@ PipelineID CommandBuffer::registerPipeline(const PipelineState state)
 	pipelines.emplace_back(
 		&vertexRangeImpl<P>,
 		&rasterizeTriangleImpl<P, T>,
+		nullptr,
 		state,
 		sizeof(typename P::VInput),
 		sizeof(typename P::VOutput)
 	);
+
+	if constexpr (HasAccurateMip<P>)
+	{
+		pipelines.back().getUV = [](const void* vOut)-> glm::vec2
+		{
+			const typename P::VOutput* v = static_cast<const P::VOutput*>(vOut);
+			return P::getUV(v);
+		};
+	}
+
 	return static_cast<PipelineID>(pipelines.size() - 1ull);
 }
 

@@ -302,6 +302,28 @@ void Renderer::threadRunBinning()
 		if (cullTriangle(a->position, b->position, c->position, cullMode))
 			return;
 
+		float tpw = 0.0f;
+
+		if (currentDrawCall->pipelineData->getUV != nullptr) {
+			const auto getUV = currentDrawCall->pipelineData->getUV;
+
+			const glm::vec2 uv0 = getUV(a);
+			const glm::vec2 uv1 = getUV(b);
+			const glm::vec2 uv2 = getUV(c);
+
+			const glm::vec2 uvEdge1 = uv1 - uv0;
+			const glm::vec2 uvEdge2 = uv2 - uv0;
+			const float uvArea = std::abs(uvEdge1.x * uvEdge2.y - uvEdge1.y * uvEdge2.x) * 0.5f;
+
+			const glm::vec2 sEdge1 = glm::vec2(b->position) - glm::vec2(a->position);
+			const glm::vec2 sEdge2 = glm::vec2(c->position) - glm::vec2(a->position);
+			const float screenArea = std::abs(sEdge1.x * sEdge2.y - sEdge1.y * sEdge2.x) * 0.5f;
+
+			if (uvArea > 0.00001f && screenArea > 0.00001f) {
+				tpw = std::sqrt(uvArea / screenArea);
+			}
+		}
+
 		const glm::vec2 pa(a->position), pb(b->position), pc(c->position);
 		const glm::vec2 bboxMin = glm::min(glm::min(pa, pb), pc);
 		const glm::vec2 bboxMax = glm::max(glm::max(pa, pb), pc);
@@ -320,6 +342,7 @@ void Renderer::threadRunBinning()
 				node.v[1] = sb;
 				node.v[2] = sc;
 				node.uniforms = uniform;
+				node.tpw = tpw;
 
 				const uint32_t tileIdx = static_cast<uint32_t>(y) * tileRowSize + static_cast<uint32_t>(x);
 				Tile& tile = tiles[tileIdx];
@@ -474,6 +497,7 @@ void Renderer::threadRunFragment()
 				.end = end,
 				.invArea = 1.0f / triangleArea,
 				.downsample = downsample,
+				.tpw = node.tpw,
 				.state = state,
 			};
 			rasterize(args);

@@ -1,5 +1,6 @@
 #pragma once
 #include <algorithm>
+#include <bit>
 #include <glm.hpp>
 #include <string_view>
 
@@ -25,9 +26,12 @@ concept PixelFormat = requires(T a) {
     return v;
 }
 
-enum Filter : uint8_t { NEAREST, LINEAR };
+enum Filter : uint8_t { NEAREST, BILINEAR, TRILINEAR };
 enum Border : uint8_t { CLAMP, REPEAT };
 enum Format : uint8_t { SRGB, UNORM };
+
+template<PixelFormat Pixel>
+class MipTexture;
 
 template<PixelFormat Pixel>
 class Texture {
@@ -80,8 +84,53 @@ public:
             std::memcpy(pixels.data(), rawData, totalPixels * sizeof(glm::u8vec4));
         }
 
-
         stbi_image_free(rawData);
+    }
+
+    explicit Texture(Texture& tex, uint32_t downsample)
+    {
+        assert(tex.swizzled && "Texture must be swizzled (POT & Square) to downsample.");
+
+        const uint32_t srcW = tex.getSize().x;
+        const uint32_t srcH = tex.getSize().y;
+
+        if (downsample == 0)
+        {
+            *this = tex;
+            return;
+        }
+
+        uint32_t maxDownsample = 0;
+        while ((srcW >> (maxDownsample + 1)) > 0)
+        {
+            maxDownsample++;
+        }
+
+        downsample = std::min(downsample, maxDownsample);
+
+        const uint32_t newWidth = srcW >> downsample;
+        const uint32_t newHeight = srcH >> downsample;
+
+        this->size = glm::uvec2(newWidth, newHeight);
+        this->swizzled = true;
+        this->pixels.resize(static_cast<size_t>(newWidth) * newHeight);
+
+        const Pixel* srcData = tex.data();
+        const size_t blockSize = static_cast<size_t>(1) << (2 * downsample);
+        const float divisor = static_cast<float>(blockSize);
+
+        for (size_t dstIdx = 0; dstIdx < this->pixels.size(); ++dstIdx)
+        {
+            size_t srcStartIdx = dstIdx * blockSize;
+
+            glm::vec4 accumulatedColor = glm::vec4(srcData[srcStartIdx]);
+            for (size_t i = 1; i < blockSize; ++i)
+            {
+                accumulatedColor += glm::vec4(srcData[srcStartIdx + i]);
+            }
+
+            this->pixels[dstIdx] = accumulatedColor / divisor;
+        }
     }
 
     [[nodiscard]] size_t getPixelIndex(const glm::uvec2 coord) const
@@ -95,6 +144,9 @@ public:
     {
         filter = newFilter;
         border = newBorder;
+
+        if (filter == TRILINEAR)
+			filter = BILINEAR;
     }
 
 	void setFormat(const Format newFormat) { format = newFormat; }
@@ -255,4 +307,115 @@ private:
     glm::uvec2 size;
     std::vector<Pixel> pixels;
 	bool swizzled = false;
+
+	friend class MipTexture<Pixel>;
+};
+
+template<PixelFormat Pixel>
+class MipTexture
+{
+public:
+    explicit MipTexture(const std::string_view filename, const float mipBias = 0.f) : lodBias(mipBias)
+    {
+        int w, h, actualChannels;
+
+        const unsigned char* rawData = stbi_load(filename.data(), &w, &h, &actualChannels, 4);
+
+        if (!rawData)
+        {
+            throw std::runtime_error("Failed to load texture: " + std::string(filename) +
+                "\nReason: " + stbi_failure_reason());
+        }
+
+        size.x = static_cast<uint32_t>(w);
+        size.y = static_cast<uint32_t>(h);
+
+        stbi_image_free(const_cast<unsigned char*>(rawData));
+
+		if (size.x != size.y || (size.x & (size.x - 1)) != 0)
+		{
+			throw std::runtime_error("MipTexture must be square and power of two in size.");
+		}
+
+        uint32_t mipCount = std::bit_width(std::max(size.x, size.y));
+        mipmaps.reserve(mipCount);
+        mipmaps.emplace_back(filename);
+
+		for (uint32_t i = 1; i < mipCount; ++i)
+		{
+            mipmaps.emplace_back(mipmaps[i - 1], 1);
+		}
+    }
+
+	void setSampler(const Filter newFilter, const Border newBorder)
+	{
+		trilinear = newFilter == TRILINEAR;
+		for (Texture<Pixel>& mip : mipmaps)
+		{
+			mip.setSampler(newFilter, newBorder);
+		}
+	}
+
+	void setMipBias(const float bias)
+	{
+		lodBias = bias;
+	}
+
+    void toggleDebugMode()
+    {
+		debugMode = !debugMode;
+    }
+
+    glm::vec4 sample(glm::vec2 uv, float tpw, const float mult, bool normalized = true)
+    {
+		uv *= mult;
+		tpw *= mult;
+
+        const float texelsPerPixel = tpw * size.x;
+		const float maxMipLevel = static_cast<float>(mipmaps.size() - 1);
+		const float mipLevel = std::min(calculateMipLevel(texelsPerPixel), maxMipLevel);
+        if (debugMode)
+        {
+			const uint32_t mipIndex = std::min(static_cast<uint32_t>(std::round(mipLevel)), static_cast<uint32_t>(mipmaps.size() - 1));
+            return { debugColors[mipIndex % std::size(debugColors)], 1.0f };
+        }
+
+		const float frac = glm::fract(mipLevel);
+
+        if (trilinear && frac != 0.0f)
+        {
+			const uint32_t lowerMip = static_cast<uint32_t>(std::floor(mipLevel));
+			const uint32_t upperMip = std::min(lowerMip + 1, static_cast<uint32_t>(mipmaps.size() - 1));
+			const glm::vec4 lowerSample = mipmaps[lowerMip].sample(uv, normalized);
+			const glm::vec4 upperSample = mipmaps[upperMip].sample(uv, normalized);
+			return glm::mix(lowerSample, upperSample, frac);
+		}
+
+		const uint32_t mipIndex = std::min(static_cast<uint32_t>(std::round(mipLevel)), static_cast<uint32_t>(mipmaps.size() - 1));
+		return mipmaps[mipIndex].sample(uv, normalized);
+    }
+
+private:
+    [[nodiscard]] float calculateMipLevel(const float texelsPerPixel) const {
+        if (texelsPerPixel <= 1.0f)
+            return 0.0f;
+
+        return std::max(0.0f, std::log2(texelsPerPixel) + lodBias);
+    }
+
+    std::vector<Texture<Pixel>> mipmaps;
+    glm::uvec2 size;
+    float lodBias = 0.f;
+    bool trilinear = false;
+    bool debugMode = false;
+
+	static constexpr glm::vec3 debugColors[] = {
+		glm::vec3(1.0f, 0.0f, 0.0f), // Red
+		glm::vec3(0.0f, 1.0f, 0.0f), // Green
+		glm::vec3(0.0f, 0.0f, 1.0f), // Blue
+		glm::vec3(1.0f, 1.0f, 0.0f), // Yellow
+		glm::vec3(1.0f, 0.0f, 1.0f), // Magenta
+		glm::vec3(0.0f, 1.0f, 1.0f), // Cyan
+		glm::vec3(1.0f, 1.0f, 1.0f)  // White
+	};
 };

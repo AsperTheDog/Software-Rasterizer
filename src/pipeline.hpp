@@ -41,19 +41,25 @@ concept Pipeline = std::is_empty_v<P> && requires
 {
     typename P::Uniform;
     typename P::VInput;
-    // VOUTPUT MUST ONLY CONTAIN FLOATS
+    // VOutput must only contain floats
     typename P::VOutput;
 } 
 	&& std::derived_from<typename P::VOutput, VOutBase> 
-	&& requires (const typename P::VInput* v_in, const typename P::Uniform* uni, const typename P::VOutput* in_v, glm::vec3 weights) 
+	&& requires (const typename P::VInput* v_in, const typename P::Uniform* uni, const typename P::VOutput* in_v, const float tpw) 
 {
     { P::vertexShader(v_in, uni) } -> std::same_as<typename P::VOutput>;
-    { P::fragmentShader(in_v, uni) } -> std::same_as<glm::vec4>;
+	// tpw only needed for mipmapped texture sampling, can be ignored otherwise
+    { P::fragmentShader(in_v, uni, tpw) } -> std::same_as<glm::vec4>;
 };
 
 template<typename P>
 concept HasBlendShader = Pipeline<P> && requires (const glm::vec4& col, const typename P::Uniform * uni) {
     { P::blendShader(col, col, uni) } -> std::same_as<glm::vec4>;
+};
+
+template<typename P>
+concept HasAccurateMip = Pipeline<P> && requires (const typename P::VOutput * in_v) {
+	{ P::getUV(in_v) } -> std::same_as<glm::vec2>;
 };
 
 template<typename P>
