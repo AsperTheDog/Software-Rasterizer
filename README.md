@@ -44,6 +44,6 @@ This is a very simple Cpp 20 project. The main two dependencies are the header o
 
 Capture of the render loop created in [main.cpp](https://github.com/AsperTheDog/Software-Rasterizer/blob/main/src/main.cpp). It uses a simple diffuse lighting pipeline and renders a cube 125 times with slightly different model matrices and colors defined in the uniforms, they also have a texture which is sampled with mipmapping using trilinear filtering. The render is done to an SRGB image which is then shown through an SDL3 window.
 
-<img width="2056" height="1160" alt="image" src="https://github.com/user-attachments/assets/75dc9233-5f53-47a0-9e29-091fa3e190a4" />
+<img width="2560" height="1380" alt="image" src="https://github.com/user-attachments/assets/1dae0e9a-209b-4b43-b021-e95eca43f6bf" />
 
-Capture of the same render loop than the previous image, but the output is being shown through the terminal. SDL3 is completely optional and chosen in the CMake config.
+Capture of the same render loop than the previous image, but the output is being shown through the terminal. SDL3 is completely optional and chosen in the CMake config. The screen tearing is inevitable because the terminal is so slow you see it sweeping its text to change frames.
