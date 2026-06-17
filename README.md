@@ -25,8 +25,12 @@ This is where things get interesting. Each thread will now take in a triangle an
 ### Fragment stage
 This stage is actually doing a lot of things at the same time. Each thread will take a list of tiles and start processing. The first step is to take in the linked list of triangles and move it to a new array, which will be sorted by triangleID. This is crucial to ensure that triangles are rendered in the same order their draw calls are issued, which is important for blending and transparency. After that, for each triangle, it creates a bounding box of the triangle once more, but clamps it to the current tile. Then, each pixel within the box is processed and, if deemed to be inside of the triangle it is processed. A processed pixel gets their depth interpolated and tested (if the pipeline configuration enabled it) against the depth buffer. If the depth test is passed then the interpolation shader is called, which returns a fully interpolated vertex output structure. This structure is then passed to the fragment shader, which is executed. The fragment shader returns an RGBA value that is passed to the blend shader (if there is any) and stored in the final image.
 
+### Compute stage
+A much simpler pipeline dispatch compared to the graphics pipeline, but it required decoupling the command buffer from draw calls to support compute calls as well. It works in a similar way to how the graphics pipeline works, but only has a compute stage. workgroup logic and predefined IDs present in GPUs is also here.
+
 ## Textures
-Textures have many capabilities baked into them. One of the main ones is that, if dimensions allow it, the texture will be swizzled using morton order for better sampling performance. Additionally, they support sampler options like linear filtering and clamp/border options. Finally, the images can be formatted as SRGB, which will be handled internally. Textures can be of any format defined by glm (which includes most privimites via any variation of glm::vec1)
+Textures have many capabilities baked into them. One of the main ones is that, if dimensions allow it, the texture will be swizzled using morton order for better sampling performance. Additionally, they support sampler options like linear filtering and clamp/border options. Finally, the images can be formatted as SRGB, which will be handled internally. Textures can be of any format defined by glm (which includes most privimites via any variation of glm::vec1).
+I have added MipTexture as well, which is supported via an extra optional "shader" in the Pipeline that simply asks for the UV data (because formats are type erased inside the renderer) so the amount of variation in UV coordinates in a triangle can be calculated relative to the amount of pixels it occupies on the screen. The fragment shader provides the texelsPerWorldUnit variable (tpw) which is then using when sampling to determine what mipmap level to use. Everything else is calculated internally. Trilinear filtering is supported as well.
 
 ## Presentation
 Two simple presentation engines have been made: One uses the terminal (it's painfully slow but it's as plug and play as it gets), the other is an SDL3 window (as fast as it gets, but needs SDL3 to work). The SDL3 window additionally allows you to control the camera, which lets you move and look round.
@@ -36,7 +40,7 @@ This is a very simple Cpp 20 project. The main two dependencies are the header o
 
 ---
 
-<img width="1922" height="1119" alt="image" src="https://github.com/user-attachments/assets/3527efcf-327e-4d13-a947-e142f18d8d3f" />
+<img width="1922" height="1119" alt="image" src="https://github.com/user-attachments/assets/74a5a187-c1a7-4351-88de-289cfcffb853" />
 
 Capture of the render loop created in [main.cpp](https://github.com/AsperTheDog/Software-Rasterizer/blob/main/src/main.cpp). It uses a simple diffuse lighting pipeline and renders a cube 125 times with slightly different model matrices and colors defined in the uniforms, they also have a texture. The render is done to an SRGB image which is then shown through an SDL3 window.
 
