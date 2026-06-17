@@ -42,7 +42,7 @@ This is a very simple Cpp 20 project. The main two dependencies are the header o
 
 <img width="1922" height="1119" alt="image" src="https://github.com/user-attachments/assets/74a5a187-c1a7-4351-88de-289cfcffb853" />
 
-Capture of the render loop created in [main.cpp](https://github.com/AsperTheDog/Software-Rasterizer/blob/main/src/main.cpp). It uses a simple diffuse lighting pipeline and renders a cube 125 times with slightly different model matrices and colors defined in the uniforms, they also have a texture. The render is done to an SRGB image which is then shown through an SDL3 window.
+Capture of the render loop created in [main.cpp](https://github.com/AsperTheDog/Software-Rasterizer/blob/main/src/main.cpp). It uses a simple diffuse lighting pipeline and renders a cube 125 times with slightly different model matrices and colors defined in the uniforms, they also have a texture which is sampled with mipmapping using trilinear filtering. The render is done to an SRGB image which is then shown through an SDL3 window.
 
 <img width="2056" height="1160" alt="image" src="https://github.com/user-attachments/assets/75dc9233-5f53-47a0-9e29-091fa3e190a4" />
 
