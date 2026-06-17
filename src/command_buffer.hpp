@@ -12,11 +12,22 @@ class CommandBufferRecording;
 
 using PipelineID = uint32_t;
 
+enum ClipFlags : uint8_t {
+	CLIP_INSIDE = 0,
+	CLIP_NEAR_PLANE = 1 << 0,
+	CLIP_FAR_PLANE = 1 << 1,
+	CLIP_LEFT_PLANE = 1 << 2,
+	CLIP_RIGHT_PLANE = 1 << 3,
+	CLIP_TOP_PLANE = 1 << 4,
+	CLIP_BOTTOM_PLANE = 1 << 5,
+};
+
 struct VertexArgs
 {
 	const void* vertexInput;
 	const void* uniform;
 	void* vertexOutput;
+	uint8_t* clipcodes;
 	uint32_t vertexCount;
 	glm::uvec2 framesize;
 };
@@ -74,13 +85,7 @@ public:
 
 	struct ComputeCommand
 	{
-		struct ComputeContext 
-		{
-			glm::uvec3 numWorkGroups;
-			glm::uvec3 globalInvocationID;
-			glm::uvec3 localInvocationID;
-			glm::uvec3 workGroupID;
-		};
+		
 
 		void(*computeShader)(const ComputeContext& ctx, const void* uniform);
 		void* uniform;
@@ -97,6 +102,9 @@ public:
 	template<Pipeline P, PixelFormat T>
 	PipelineID registerPipeline(PipelineState state);
 
+	template<ComputePipeline P>
+	void commitCompute(const P::Uniform& uniform, glm::uvec3 localGroupSize, glm::vec3 groupCount);
+
 private:
 	using Command = std::variant<
 		DrawCallBatchCommand,
@@ -112,6 +120,21 @@ private:
 	friend class Renderer;
 };
 
+inline void vertexClipCalc(const VertexArgs& args, const VOutBase& out, const uint32_t idx)
+{
+	const glm::vec4 p = out.clipPosition;
+
+	uint8_t code = CLIP_INSIDE;
+	if (p.z + p.w < 0.0f || p.w <= 0.0f) code |= CLIP_NEAR_PLANE;
+	if (p.z - p.w > 0.0f)                code |= CLIP_FAR_PLANE;
+	if (p.x + p.w < 0.0f)                code |= CLIP_LEFT_PLANE;
+	if (p.x - p.w > 0.0f)                code |= CLIP_RIGHT_PLANE;
+	if (p.y + p.w < 0.0f)                code |= CLIP_BOTTOM_PLANE;
+	if (p.y - p.w > 0.0f)                code |= CLIP_TOP_PLANE;
+
+	args.clipcodes[idx] = code;
+}
+
 template<Pipeline P>
 void vertexRangeImpl(const VertexArgs& args)
 {
@@ -126,6 +149,9 @@ void vertexRangeImpl(const VertexArgs& args)
 	for (uint32_t i = 0; i < args.vertexCount; ++i)
 	{
 		vOut[i] = P::vertexShader(&vIn[i], uniform);
+		vOut[i].clipPosition = vOut[i].position;
+
+		vertexClipCalc(args, vOut[i], i);
 
 		const float oneOverW = 1.0f / vOut[i].position.w;
 		vOut[i].position *= oneOverW;
@@ -166,6 +192,8 @@ void rasterizeTriangleImpl(const RasterArgs& a)
 				continue;
 
 			const float depth = w0 * v1->position.z + w1 * v2->position.z + w2 * v3->position.z;
+			if (depth > 1.0f)
+				continue;
 			if (a.state.depthTest)
 			{
 				const float oldDepth = depthBuffer->at(glm::uvec2(x, y)).x;
@@ -192,7 +220,28 @@ void rasterizeTriangleImpl(const RasterArgs& a)
 				}
 			}
 
-			VOutput interpolated = P::interpolationShader(v1, v2, v3, glm::vec3(w0, w1, w2), uni);
+			VOutput interpolated{};
+			{
+				const float invW1 = v1->position.w;
+				const float invW2 = v2->position.w;
+				const float invW3 = v3->position.w;
+				const float denom = invW1 * w0 + invW2 * w1 + invW3 * w2;
+				const float invDenom = denom != 0.0f ? 1.0f / denom : 0.0f;
+				const float pc0 = invW1 * w0 * invDenom;
+				const float pc1 = invW2 * w1 * invDenom;
+				const float pc2 = invW3 * w2 * invDenom;
+
+				interpolated.position = w0 * v1->position + w1 * v2->position + w2 * v3->position;
+
+				const float* fa = reinterpret_cast<const float*>(v1);
+				const float* fb = reinterpret_cast<const float*>(v2);
+				const float* fc = reinterpret_cast<const float*>(v3);
+				float* fd = reinterpret_cast<float*>(&interpolated);
+				constexpr uint32_t skip = sizeof(VOutBase) / sizeof(float);
+				constexpr uint32_t count = sizeof(VOutput) / sizeof(float);
+				for (uint32_t i = skip; i < count; ++i)
+					fd[i] = fa[i] * pc0 + fb[i] * pc1 + fc[i] * pc2;
+			}
 			glm::vec4 fragmentOutput = P::fragmentShader(&interpolated, uni);
 
 			if constexpr (HasBlendShader<P>)
@@ -219,7 +268,25 @@ PipelineID CommandBuffer::registerPipeline(const PipelineState state)
 		sizeof(typename P::VInput),
 		sizeof(typename P::VOutput)
 	);
-	return pipelines.size() - 1ull;
+	return static_cast<PipelineID>(pipelines.size() - 1ull);
+}
+
+template <ComputePipeline P>
+void CommandBuffer::commitCompute(const typename P::Uniform& uniform, glm::uvec3 localGroupSize, glm::vec3 groupCount)
+{
+	ComputeCommand cmd{
+		.computeShader = [](const ComputeContext& ctx, const void* uni)
+		{
+			const typename P::Uniform* u = static_cast<P::Uniform*>(uni);
+			P::computeShader(ctx, u);
+		},
+		.uniform = &uniform,
+		.threads = groupCount,
+		.localGroupSize = localGroupSize,
+		.totalThreads = groupCount.x * groupCount.y * groupCount.z,
+	};
+
+	commands.emplace_back(cmd);
 }
 
 template<Pipeline P>
@@ -280,7 +347,7 @@ public:
 			);
 		}
 
-		commandBuffer.commands.emplace_back(std::move(cmd));
+		commandBuffer.commands.emplace_back(cmd);
 	}
 
 	void reserve(uint32_t drawcalls, uint32_t uniforms)

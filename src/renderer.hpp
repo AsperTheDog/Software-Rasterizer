@@ -16,7 +16,7 @@ public:
 	~Renderer();
 
 	void execute(const CommandBuffer& commandBuffer);
-
+	void endFrame();
 	
 	void setFramesize(const glm::uvec2 newSize)
 	{
@@ -74,10 +74,14 @@ private:
 
 	void initTiles();
 
+	static constexpr uint32_t CULL_BIT = 0x80000000u;
+	[[nodiscard]] const VOutBase* resolveVertex(uint32_t slot, uint32_t vOutStride) const;
+
 	glm::uvec2 framesize;
 
 	std::vector<uint8_t> geometryScratchpad;
 	std::vector<uint8_t> cullGeomScratchpad;
+	std::vector<uint8_t> clipcodes;
 	std::vector<BinNode> binningScratchpad;
 	std::vector<Tile> tiles;
 	uint32_t tileRowSize = 0;
@@ -99,7 +103,7 @@ private:
 	const CommandBuffer::DrawCallBatchCommand* currentDrawCall = nullptr;
 	const CommandBuffer::ComputeCommand* currentComputeCall = nullptr;
 
-	float vertexTime = 0.0f, binningTime = 0.0f, fragmentTime = 0.0f, frameTime = 0.0f, computeTime = 0.0f;
+	double vertexTime = 0.0f, binningTime = 0.0f, fragmentTime = 0.0f, frameTime = 0.0f, computeTime = 0.0f;
 	std::chrono::time_point<std::chrono::steady_clock> prevFrame;
 };
 

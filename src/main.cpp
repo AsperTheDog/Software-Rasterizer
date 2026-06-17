@@ -50,15 +50,6 @@ public:
 		return vOut;
 	}
 
-	static VOutput interpolationShader(const VOutput* v1, const VOutput* v2, const VOutput* v3, const glm::vec3 barycentrics, const Uniform* uni)
-	{
-		VOutput vOut{};
-		vOut.position = ShaderUtils::interpolateLinear(v1->position, v2->position, v3->position, barycentrics);
-		vOut.normal = ShaderUtils::interpolatePerspective(v1->normal, v2->normal, v3->normal, barycentrics, v1, v2, v3);
-		vOut.uvCoords = ShaderUtils::interpolatePerspective(v1->uvCoords, v2->uvCoords, v3->uvCoords, barycentrics, v1, v2, v3);
-		return vOut;
-	}
-
 	static glm::vec4 fragmentShader(const VOutput* vOut, const Uniform* uni)
 	{
 		const glm::vec3 normalizedNormal = glm::normalize(vOut->normal);
@@ -201,8 +192,8 @@ int main()
 				for (int y = -2; y <= 2; y++)
 				{
 					glm::mat4 modelMat = glm::translate(glm::vec3(static_cast<float>(x) * 3.f, static_cast<float>(y) * 3.f, -4.f - static_cast<float>(z) * 3.f));
-					modelMat = glm::rotate(modelMat, glm::radians(time * 50.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-					modelMat = glm::rotate(modelMat, glm::radians(time * 30.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+					modelMat = glm::rotate(modelMat, glm::radians(time * 5.f), glm::vec3(0.0f, 1.0f, 0.0f));
+					modelMat = glm::rotate(modelMat, glm::radians(time * 3.f), glm::vec3(1.0f, 0.0f, 0.0f));
 
 					glm::mat4 normalMat = glm::transpose(glm::inverse(modelMat));
 
@@ -232,7 +223,10 @@ int main()
 		colorTexture.clear(glm::u8vec4(0, 0, 0, 255));
 		depthTexture.clear(glm::vec1(std::numeric_limits<float>::infinity()));
 
-		time += renderer.getFrameTime() / 1000.0f;
+		time += renderer.getFrameTime() / 100.f;
+		if (time > 360.0f)
+			time -= 360.0f;
+		renderer.endFrame();
 	}
 
 #ifndef SDL_OUTPUT

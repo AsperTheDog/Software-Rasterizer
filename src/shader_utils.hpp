@@ -4,6 +4,7 @@
 
 struct VOutBase {
     glm::vec4 position;
+    glm::vec4 clipPosition;
 };
 
 namespace ShaderUtils {

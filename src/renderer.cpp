@@ -27,6 +27,16 @@ namespace
 {
 	template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
 	template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
+
+	void clipLerpRaw(uint8_t* dst, const uint8_t* a, const uint8_t* b, const float t, const uint32_t vOutStride)
+	{
+		const float* fa = reinterpret_cast<const float*>(a);
+		const float* fb = reinterpret_cast<const float*>(b);
+		float* fd = reinterpret_cast<float*>(dst);
+		const uint32_t floatCount = vOutStride / static_cast<uint32_t>(sizeof(float));
+		for (uint32_t i = 0; i < floatCount; ++i)
+			fd[i] = fa[i] + (fb[i] - fa[i]) * t;
+	}
 }
 
 void Renderer::execute(const CommandBuffer& commandBuffer)
@@ -66,10 +76,12 @@ void Renderer::execute(const CommandBuffer& commandBuffer)
 				}
 				totalTriangles = triangles;
 				geometryScratchpad.resize(static_cast<size_t>(vertices) * arg.pipelineData->vOutStride);
+				clipcodes.resize(vertices);
 				cullGeomScratchpad.resize(std::max(100000u, static_cast<uint32_t>(geometryScratchpad.size() / 9 * 3)));
 
 				triangleCounter.store(0, std::memory_order_relaxed);
 				binningCounter.store(0, std::memory_order_relaxed);
+				binningCullCounter.store(0, std::memory_order_relaxed);
 				tileCounter.store(0, std::memory_order_relaxed);
 
 				for (Tile& tile : tiles)
@@ -118,11 +130,13 @@ void Renderer::execute(const CommandBuffer& commandBuffer)
 			}
 		}, command);
 	}
+}
 
-	const std::chrono::time_point<std::chrono::steady_clock> frameEnd = std::chrono::high_resolution_clock::now();
-
-	frameTime = std::chrono::duration<float, std::milli>(frameEnd - prevFrame).count();
-	prevFrame = frameEnd;
+void Renderer::endFrame()
+{
+	const auto now = std::chrono::high_resolution_clock::now();
+	frameTime = std::chrono::duration<float, std::milli>(now - prevFrame).count();
+	prevFrame = now;
 }
 
 void Renderer::threadRun(const std::stop_token& stopToken, const uint32_t threadID)
@@ -204,6 +218,7 @@ void Renderer::threadRunVertex(const uint32_t threadID) {
 			.vertexInput = srcVertexBytes,
 			.uniform = drawCall.uniform,
 			.vertexOutput = dstGeometryBytes,
+			.clipcodes = clipcodes.data() + currentIdx,
 			.vertexCount = verticesToProcess,
 			.framesize = framesize
 		};
@@ -243,9 +258,77 @@ static bool cullTriangle(const glm::vec3& v0, const glm::vec3& v1, const glm::ve
 	return false;
 }
 
+const VOutBase* Renderer::resolveVertex(const uint32_t slot, const uint32_t vOutStride) const
+{
+	if (slot & CULL_BIT)
+		return reinterpret_cast<const VOutBase*>(cullGeomScratchpad.data() + static_cast<size_t>(slot & ~CULL_BIT) * vOutStride);
+	return reinterpret_cast<const VOutBase*>(geometryScratchpad.data() + static_cast<size_t>(slot) * vOutStride);
+}
+
 void Renderer::threadRunBinning()
 {
 	const uint32_t vOutStride = currentDrawCall->pipelineData->vOutStride;
+	const PipelineState::CullMode cullMode = currentDrawCall->pipelineData->state.cullMode;
+	const glm::ivec2 maxTileIndex = glm::ivec2(framesize / 16u) - glm::ivec2(1);
+	const uint32_t cullCapacity = static_cast<uint32_t>(cullGeomScratchpad.size() / vOutStride);
+
+	const auto makeClipVertex = [&](const VOutBase* a, const VOutBase* b, const float t) -> uint32_t
+	{
+		uint32_t idx = binningCullCounter.fetch_add(1, std::memory_order_relaxed);
+		if (idx >= cullCapacity)
+			idx = cullCapacity - 1;
+
+		uint8_t* dst = cullGeomScratchpad.data() + static_cast<size_t>(idx) * vOutStride;
+		clipLerpRaw(dst, reinterpret_cast<const uint8_t*>(a), reinterpret_cast<const uint8_t*>(b), t, vOutStride);
+
+		VOutBase* out = reinterpret_cast<VOutBase*>(dst);
+		const float oneOverW = 1.0f / out->clipPosition.w;
+		out->position = out->clipPosition * oneOverW;
+		out->position.x = (out->position.x + 1.0f) * 0.5f * static_cast<float>(framesize.x);
+		out->position.y = (out->position.y + 1.0f) * 0.5f * static_cast<float>(framesize.y);
+		out->position.w = oneOverW;
+		return idx | CULL_BIT;
+	};
+
+	const auto emitTriangle = [&](const uint32_t triID, const void* uniform, const uint32_t sa, const uint32_t sb, const uint32_t sc)
+	{
+		const VOutBase* a = resolveVertex(sa, vOutStride);
+		const VOutBase* b = resolveVertex(sb, vOutStride);
+		const VOutBase* c = resolveVertex(sc, vOutStride);
+
+		if (!(a->position.w > 0.0f) || !(b->position.w > 0.0f) || !(c->position.w > 0.0f))
+			return;
+
+		if (cullTriangle(a->position, b->position, c->position, cullMode))
+			return;
+
+		const glm::vec2 pa(a->position), pb(b->position), pc(c->position);
+		const glm::vec2 bboxMin = glm::min(glm::min(pa, pb), pc);
+		const glm::vec2 bboxMax = glm::max(glm::max(pa, pb), pc);
+
+		const glm::ivec2 tileMin = glm::clamp(glm::ivec2(glm::floor(bboxMin / 16.0f)), glm::ivec2(0), maxTileIndex);
+		const glm::ivec2 tileMax = glm::clamp(glm::ivec2(glm::floor(bboxMax / 16.0f)), glm::ivec2(0), maxTileIndex);
+
+		for (int32_t y = tileMin.y; y <= tileMax.y; ++y)
+		{
+			for (int32_t x = tileMin.x; x <= tileMax.x; ++x)
+			{
+				const uint32_t nodeIdx = binningCounter.fetch_add(1, std::memory_order_relaxed);
+				BinNode& node = binningScratchpad[nodeIdx];
+				node.triangleID = triID;
+				node.v[0] = sa;
+				node.v[1] = sb;
+				node.v[2] = sc;
+				node.uniforms = uniform;
+
+				const uint32_t tileIdx = static_cast<uint32_t>(y) * tileRowSize + static_cast<uint32_t>(x);
+				Tile& tile = tiles[tileIdx];
+				const uint32_t oldHead = tile.head.exchange(nodeIdx, std::memory_order_acq_rel);
+				node.next = oldHead;
+				tile.count.fetch_add(1, std::memory_order_acq_rel);
+			}
+		}
+	};
 
 	while (true)
 	{
@@ -281,48 +364,49 @@ void Renderer::threadRunBinning()
 			slot[2] = info.vertexBase + localTri * 3 + 2;
 		}
 
-		const VOutBase* v1 = reinterpret_cast<const VOutBase*>(&geometryScratchpad[static_cast<size_t>(slot[0]) * vOutStride]);
-		const VOutBase* v2 = reinterpret_cast<const VOutBase*>(&geometryScratchpad[static_cast<size_t>(slot[1]) * vOutStride]);
-		const VOutBase* v3 = reinterpret_cast<const VOutBase*>(&geometryScratchpad[static_cast<size_t>(slot[2]) * vOutStride]);
+		const uint8_t c0 = clipcodes[slot[0]];
+		const uint8_t c1 = clipcodes[slot[1]];
+		const uint8_t c2 = clipcodes[slot[2]];
 
-		if (v1->position.w <= 0.0f || !std::isfinite(v1->position.w) ||
-			v2->position.w <= 0.0f || !std::isfinite(v2->position.w) ||
-			v3->position.w <= 0.0f || !std::isfinite(v3->position.w))
+		if ((c0 & c1 & c2) != 0)
+			continue;
+
+		if (((c0 | c1 | c2) & CLIP_NEAR_PLANE) == 0)
 		{
+			emitTriangle(nextTri, info.uniform, slot[0], slot[1], slot[2]);
 			continue;
 		}
 
-		if (cullTriangle(v1->position, v2->position, v3->position, currentDrawCall->pipelineData->state.cullMode))
+		const VOutBase* tv[3] = {
+			resolveVertex(slot[0], vOutStride),
+			resolveVertex(slot[1], vOutStride),
+			resolveVertex(slot[2], vOutStride),
+		};
+		const float dist[3] = {
+			tv[0]->clipPosition.z + tv[0]->clipPosition.w,
+			tv[1]->clipPosition.z + tv[1]->clipPosition.w,
+			tv[2]->clipPosition.z + tv[2]->clipPosition.w,
+		};
+
+		uint32_t poly[4];
+		uint32_t polyCount = 0;
+		for (uint32_t i = 0; i < 3; ++i)
 		{
-			continue;
-		}
+			const uint32_t j = (i + 1) % 3;
+			const bool insideI = dist[i] >= 0.0f;
+			const bool insideJ = dist[j] >= 0.0f;
 
-		const glm::vec2 bboxMin = glm::min(glm::min(v1->position, v2->position), v3->position);
-		const glm::vec2 bboxMax = glm::max(glm::max(v1->position, v2->position), v3->position);
-
-		const glm::uvec2 maxTileIndex = framesize / 16u - glm::uvec2(1u);
-		const glm::uvec2 tileMin = glm::clamp(glm::uvec2(bboxMin / 16.0f), glm::uvec2(0u), maxTileIndex);
-		const glm::uvec2 tileMax = glm::clamp(glm::uvec2(bboxMax / 16.0f), glm::uvec2(0u), maxTileIndex);
-
-		for (uint32_t y = tileMin.y; y <= tileMax.y; ++y)
-		{
-			for (uint32_t x = tileMin.x; x <= tileMax.x; ++x)
+			if (insideI)
+				poly[polyCount++] = slot[i];
+			if (insideI != insideJ)
 			{
-				const uint32_t nodeIdx = binningCounter.fetch_add(1, std::memory_order_relaxed);
-				BinNode& node = binningScratchpad[nodeIdx];
-				node.triangleID = nextTri;
-				node.v[0] = slot[0];
-				node.v[1] = slot[1];
-				node.v[2] = slot[2];
-				node.uniforms = info.uniform;
-
-				const uint32_t tileIdx = y * tileRowSize + x;
-				Tile& tile = tiles[tileIdx];
-				const uint32_t oldHead = tile.head.exchange(nodeIdx, std::memory_order_acq_rel);
-				node.next = oldHead;
-				tile.count.fetch_add(1, std::memory_order_acq_rel);
+				const float t = dist[i] / (dist[i] - dist[j]);
+				poly[polyCount++] = makeClipVertex(tv[i], tv[j], t);
 			}
 		}
+
+		for (uint32_t k = 1; k + 1 < polyCount; ++k)
+			emitTriangle(nextTri, info.uniform, poly[0], poly[k], poly[k + 1]);
 	}
 }
 
@@ -361,9 +445,9 @@ void Renderer::threadRunFragment()
 
 		for (const BinNode& node : localBinNodes)
 		{
-			const VOutBase* v1 = reinterpret_cast<const VOutBase*>(&geometryScratchpad[static_cast<size_t>(node.v[0]) * vOutStride]);
-			const VOutBase* v2 = reinterpret_cast<const VOutBase*>(&geometryScratchpad[static_cast<size_t>(node.v[1]) * vOutStride]);
-			const VOutBase* v3 = reinterpret_cast<const VOutBase*>(&geometryScratchpad[static_cast<size_t>(node.v[2]) * vOutStride]);
+			const VOutBase* v1 = resolveVertex(node.v[0], vOutStride);
+			const VOutBase* v2 = resolveVertex(node.v[1], vOutStride);
+			const VOutBase* v3 = resolveVertex(node.v[2], vOutStride);
 
 			const glm::vec2 p1 = glm::vec2(v1->position);
 			const glm::vec2 p2 = glm::vec2(v2->position);
@@ -415,7 +499,7 @@ void Renderer::threadRunCompute() {
 			nextCompute / (totalGlobalThreads.x * totalGlobalThreads.y)
 		};
 
-		CommandBuffer::ComputeCommand::ComputeContext ctx{
+		ComputeContext ctx{
 			.numWorkGroups = numWorkGroups,
 			.globalInvocationID = globalInvocationID,
 			.localInvocationID = globalInvocationID % localGroupSize,
