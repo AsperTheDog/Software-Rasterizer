@@ -356,6 +356,14 @@ public:
 		}
 	}
 
+    void setFormat(const Format newFormat) 
+	{
+        for (Texture<Pixel>& mip : mipmaps)
+        {
+            mip.setFormat(newFormat);
+        }
+    }
+
 	void setMipBias(const float bias)
 	{
 		lodBias = bias;
