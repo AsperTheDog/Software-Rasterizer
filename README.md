@@ -38,6 +38,47 @@ Two simple presentation engines have been made: One uses the terminal (it's pain
 # Scenes
 The render loop in [main.cpp](https://github.com/AsperTheDog/Software-Rasterizer/blob/main/src/main.cpp) is a small host for scenes. A scene is any type satisfying the Scene concept in [scenes.hpp](https://github.com/AsperTheDog/Software-Rasterizer/blob/main/src/scenes.hpp). It is constructed from a CommandBuffer, reports a name and a camera setup, and records its own draw calls into the buffer each frame. I made some scenes as examples with different properties, feel free to switch them around and play with them as you like.
 
+# Benchmarks
+All numbers are the full frame time at 1280x720 rendering to an SRGB target, measured on a Ryzen 7 5700X with GCC 13 at -O2 under WSL2. Each value is the result of 5 runs of 8 frames after a warmup. Multithreaded runs use all 16 hardware threads and show the best run, since the OS noise at a few milliseconds is bigger than the differences otherwise. Single core runs show the median.
+
+## All threads
+| Scene | SIMD off | SIMD on | Speedup |
+| --- | ---: | ---: | ---: |
+| Cubes | 12.2 ms | 9.8 ms | 1.24x |
+| Terrain | 6.8 ms | 7.1 ms | 0.96x |
+| Torus knot | 4.5 ms | 4.1 ms | 1.09x |
+| Blend | 4.4 ms | 4.0 ms | 1.09x |
+| Mip debug | 1.9 ms | 1.8 ms | 1.04x |
+| Stress | 6.1 ms | 5.9 ms | 1.03x |
+| Compute | 4.5 ms | 4.6 ms | 0.99x |
+| GLTF | 6.2 ms | 6.0 ms | 1.04x |
+
+## Single core
+| Scene | SIMD off | SIMD on | Speedup |
+| --- | ---: | ---: | ---: |
+| Cubes | 75.1 ms | 54.9 ms | 1.37x |
+| Terrain | 39.5 ms | 38.3 ms | 1.03x |
+| Torus knot | 32.4 ms | 25.1 ms | 1.29x |
+| Blend | 20.3 ms | 15.7 ms | 1.29x |
+| Mip debug | 4.1 ms | 3.3 ms | 1.24x |
+| Stress | 32.9 ms | 32.1 ms | 1.02x |
+| Compute | 23.0 ms | 22.1 ms | 1.04x |
+| GLTF | 49.6 ms | 46.5 ms | 1.07x |
+
+## Texture filtering
+The filter is the only thing that changes between rows, scenes that do not sample a texture are not affected by it. Measured with all threads.
+
+| Scene | Filter | SIMD off | SIMD on |
+| --- | --- | ---: | ---: |
+| Cubes | Nearest | 8.4 ms | 8.2 ms |
+| Cubes | Bilinear | 10.1 ms | 9.0 ms |
+| Cubes | Trilinear | 12.2 ms | 9.8 ms |
+| Torus knot | Nearest | 3.8 ms | 3.9 ms |
+| Torus knot | Bilinear | 4.1 ms | 3.7 ms |
+| Torus knot | Trilinear | 4.5 ms | 4.1 ms |
+
+I have found that mostly it is when using trilinear when the intrinsics really matter, because it blends two bilinear samples and the compiler could not keep the intermediate colors in registers by itself (thus no automatic intrinsics were used). In the cubes scene trilinear costs about 21% more than bilinear without them, and around 9% more with them. Nearest filtering never touches the blend code, so the small differences between its two columns are just noise (I still left them as reference and for completeness).
+
 # Building
 This is a very simple Cpp 20 project. The main two dependencies are the header only libraris [GLM](https://github.com/g-truc/glm) and [STB](https://github.com/nothings/stb) (specifically STB_Image). The .glb loader also needs [tinygltf](https://github.com/syoyo/tinygltf) v3, which is a header plus its .c file, so point TINYGLTF_INCLUDE_DIR at the folder holding tiny_gltf_v3.h, tiny_gltf_v3.c and tinygltf_json_c.h. Just tell CMake where they are when building. Optionally, you can also point to the location of SDL3 if you wish to use the SDL3 output. The project expects a path to the include files folder and a path to the .lib folder.
 
@@ -64,5 +105,3 @@ Captura of a Torus Knot created using the Torus Knot Scene, defined in [scenes.h
 <img width="1922" height="1119" alt="image" src="https://github.com/user-attachments/assets/0d42e248-f17d-4b6e-84e6-c5103fea4b34" />
 
 Capture of Sponza using PBR rendering, it uses the same pipeline and scene system as with the helmet.
-
-
