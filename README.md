@@ -135,3 +135,9 @@ Captura of a Torus Knot created using the Torus Knot Scene, defined in [scenes.h
 <img width="1922" height="1119" alt="image" src="https://github.com/user-attachments/assets/0d42e248-f17d-4b6e-84e6-c5103fea4b34" />
 
 Capture of Sponza using PBR rendering, it uses the same pipeline and scene system as with the helmet.
+
+---
+
+<img width="1922" height="1119" alt="image" src="https://github.com/user-attachments/assets/b706e1e3-ead6-41f4-b830-79a7eba6f523" />
+
+Capture that mixes together a lot of techniques. This scene is rendered with many lights using deferred rendering (deferred scene from [multipass.hpp](https://github.com/AsperTheDog/Software-Rasterizer/blob/main/src/multipass.hpp)), and has bloom and post processing on top (bloom scene and postFX scene, both in [multipass.hpp](https://github.com/AsperTheDog/Software-Rasterizer/blob/main/src/scenes.hpp))
