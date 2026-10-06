@@ -442,13 +442,6 @@ GltfModel loadGltf(const std::string& path)
 						out.indices.push_back(i);
 				}
 
-				for (size_t i = 0; i + 2 < out.indices.size(); i += 3)
-				{
-					const uint32_t second = out.indices[i + 1];
-					out.indices[i + 1] = out.indices[i + 2];
-					out.indices[i + 2] = second;
-				}
-
 				model.sourceVertexCount += static_cast<uint32_t>(out.vertices.size());
 				model.sourceIndexCount += static_cast<uint32_t>(out.indices.size());
 				model.sourceTriangleCount += static_cast<uint32_t>(out.indices.size() / 3u);

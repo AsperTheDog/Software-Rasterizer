@@ -1,6 +1,7 @@
 #pragma once
+#include <array>
+#include <cassert>
 #include <cstdint>
-#include <cstring>
 #include <glm.hpp>
 #include <limits>
 #include <optional>
@@ -28,6 +29,7 @@ enum ClipFlags : uint8_t {
 struct VertexArgs
 {
 	const void* vertexInput;
+	const void* instanceInput;
 	const void* uniform;
 	void* vertexOutput;
 	uint8_t* clipcodes;
@@ -41,8 +43,9 @@ struct RasterArgs
 	const void* v2;
 	const void* v3;
 	const void* uniform;
+	const void* instance;
 
-	void* framebuffer;
+	void* const* framebuffers;
 	Texture<glm::vec1>* depthBuffer;
 
 	glm::ivec2 start;
@@ -56,7 +59,7 @@ struct RasterArgs
 
 struct ClearState
 {
-	std::optional<glm::vec4> color;
+	std::array<std::optional<glm::vec4>, kMaxColorTargets> colors;
 	std::optional<float> depth;
 };
 
@@ -73,6 +76,7 @@ public:
 
 		uint32_t vertexStride;
 		uint32_t vOutStride;
+		bool instanced;
 	};
 
 	struct FillTarget
@@ -94,6 +98,7 @@ public:
 		{
 			const void* uniform;
 			const void* vertexData;
+			const void* instanceData;
 			const uint32_t* indexData;
 
 			uint32_t vertexCount;
@@ -102,10 +107,11 @@ public:
 
 		PipelineID pipelineID;
 
-		void* framebuffer;
+		std::array<void*, kMaxColorTargets> framebuffers{};
 		Texture<glm::vec1>* depthBuffer;
+		std::optional<glm::uvec2> extent;
 
-		std::optional<FillTarget> colorClear;
+		std::array<std::optional<FillTarget>, kMaxColorTargets> colorClears;
 		std::optional<FillTarget> depthClear;
 
 		std::vector<DrawCallData> drawCalls;
@@ -153,7 +159,10 @@ public:
 		commands.emplace_back(ClearCommand{ .target = makeFillTarget(texture, value) });
 	}
 
-	template<Pipeline P, PixelFormat T>
+	template<HasFragmentShader P>
+	PipelineID registerPipeline(PipelineState state);
+
+	template<DepthOnlyPipeline P>
 	PipelineID registerPipeline(PipelineState state);
 
 	template<ComputePipeline P>
@@ -175,6 +184,31 @@ private:
 	friend class Renderer;
 };
 
+template<PixelFormat... T>
+class Attachments
+{
+public:
+	explicit Attachments(Texture<T>&... textures) : textures(textures...)
+	{
+		const glm::uvec2 size = std::get<0>(this->textures).getSize();
+		assert(((textures.getSize() == size) && ...) && "All attachments must have the same size.");
+	}
+
+	void bind(CommandBuffer::DrawCallBatchCommand& cmd, const ClearState& clearState) const
+	{
+		[&]<size_t... I>(std::index_sequence<I...>)
+		{
+			((cmd.framebuffers[I] = &std::get<I>(textures), clearState.colors[I] ? void(cmd.colorClears[I] = CommandBuffer::makeFillTarget(std::get<I>(textures), *clearState.colors[I])) : void()), ...);
+		}(std::index_sequence_for<T...>{});
+	}
+
+private:
+	std::tuple<Texture<T>&...> textures;
+};
+
+template<PixelFormat... T>
+Attachments(Texture<T>&...) -> Attachments<T...>;
+
 inline void vertexClipCalc(const VertexArgs& args, const VOutBase& out, const uint32_t idx)
 {
 	const glm::vec4 p = out.clipPosition;
@@ -191,6 +225,24 @@ inline void vertexClipCalc(const VertexArgs& args, const VOutBase& out, const ui
 }
 
 template<Pipeline P>
+typename P::VOutput runVertexShader(const typename P::VInput* vertex, [[maybe_unused]] const void* instance, const typename P::Uniform* uniform)
+{
+	if constexpr (InstancedPipeline<P>)
+		return P::vertexShader(vertex, static_cast<const typename P::InstanceInput*>(instance), uniform);
+	else
+		return P::vertexShader(vertex, uniform);
+}
+
+template<HasFragmentShader P>
+FragmentReturn<P> runFragmentShader(const typename P::VOutput* vOut, [[maybe_unused]] const void* instance, const typename P::Uniform* uniform, const float tpw)
+{
+	if constexpr (InstancedPipeline<P>)
+		return P::fragmentShader(vOut, static_cast<const typename P::InstanceInput*>(instance), uniform, tpw);
+	else
+		return P::fragmentShader(vOut, uniform, tpw);
+}
+
+template<Pipeline P>
 void vertexRangeImpl(const VertexArgs& args)
 {
 	using VInput = P::VInput;
@@ -203,7 +255,7 @@ void vertexRangeImpl(const VertexArgs& args)
 
 	for (uint32_t i = 0; i < args.vertexCount; ++i)
 	{
-		vOut[i] = P::vertexShader(&vIn[i], uniform);
+		vOut[i] = runVertexShader<P>(&vIn[i], args.instanceInput, uniform);
 		vOut[i].clipPosition = vOut[i].position;
 
 		vertexClipCalc(args, vOut[i], i);
@@ -211,7 +263,7 @@ void vertexRangeImpl(const VertexArgs& args)
 		const float oneOverW = 1.0f / vOut[i].position.w;
 		vOut[i].position *= oneOverW;
 		vOut[i].position.x = (vOut[i].position.x + 1.0f) * 0.5f * static_cast<float>(args.framesize.x);
-		vOut[i].position.y = (vOut[i].position.y + 1.0f) * 0.5f * static_cast<float>(args.framesize.y);
+		vOut[i].position.y = (1.0f - vOut[i].position.y) * 0.5f * static_cast<float>(args.framesize.y);
 		vOut[i].position.w = oneOverW;
 	}
 }
@@ -222,7 +274,31 @@ inline float fillRuleBias(const float stepX, const float stepY)
 	return topLeft ? 0.0f : std::numeric_limits<float>::denorm_min();
 }
 
-template<Pipeline P, PixelFormat T>
+template<PixelFormat T>
+void writeTarget(void* target, const glm::vec4 color, const uint32_t bx0, const uint32_t by0, const uint32_t ds)
+{
+	Texture<T>& framebuffer = *static_cast<Texture<T>*>(target);
+	const glm::uvec2 outputSize = framebuffer.getSize();
+
+	constexpr bool quantize = !std::is_floating_point_v<typename T::value_type>;
+
+	const uint32_t bx1 = glm::min(bx0 + ds, outputSize.x);
+	const uint32_t by1 = glm::min(by0 + ds, outputSize.y);
+	for (uint32_t by = by0; by < by1; ++by)
+		for (uint32_t bx = bx0; bx < bx1; ++bx)
+			framebuffer.setPixel(glm::uvec2(bx, by), color, quantize);
+}
+
+template<PixelFormat... T>
+void writeTargets(const RasterArgs& a, const glm::vec4* colors, const uint32_t bx0, const uint32_t by0, TargetList<T...>)
+{
+	[&]<size_t... I>(std::index_sequence<I...>)
+	{
+		(writeTarget<T>(a.framebuffers[I], colors[I], bx0, by0, a.downsample), ...);
+	}(std::index_sequence_for<T...>{});
+}
+
+template<Pipeline P>
 void rasterizeTriangleImpl(const RasterArgs& a)
 {
 	using VOutput = P::VOutput;
@@ -233,11 +309,7 @@ void rasterizeTriangleImpl(const RasterArgs& a)
 	const VOutput* v3 = static_cast<const VOutput*>(a.v3);
 	const Uniform* uni = static_cast<const Uniform*>(a.uniform);
 
-	Texture<T>& framebuffer = *static_cast<Texture<T>*>(a.framebuffer);
 	Texture<glm::vec1>* const depthBuffer = a.depthBuffer;
-
-	const uint32_t ds = a.downsample;
-	const glm::uvec2 outputSize = framebuffer.getSize();
 
 	const glm::vec2 p1 = glm::vec2(v1->position);
 	const glm::vec2 p2 = glm::vec2(v2->position);
@@ -296,55 +368,59 @@ void rasterizeTriangleImpl(const RasterArgs& a)
 				}
 			}
 
-			VOutput interpolated{};
+			if constexpr (HasFragmentShader<P>)
 			{
-				const float invW1 = v1->position.w;
-				const float invW2 = v2->position.w;
-				const float invW3 = v3->position.w;
-				const float denom = invW1 * w0 + invW2 * w1 + invW3 * w2;
-				const float invDenom = denom != 0.0f ? 1.0f / denom : 0.0f;
-				const float pc0 = invW1 * w0 * invDenom;
-				const float pc1 = invW2 * w1 * invDenom;
-				const float pc2 = invW3 * w2 * invDenom;
+				using Targets = P::Targets;
 
-				interpolated.position = w0 * v1->position + w1 * v2->position + w2 * v3->position;
+				VOutput interpolated{};
+				{
+					const float invW1 = v1->position.w;
+					const float invW2 = v2->position.w;
+					const float invW3 = v3->position.w;
+					const float denom = invW1 * w0 + invW2 * w1 + invW3 * w2;
+					const float invDenom = denom != 0.0f ? 1.0f / denom : 0.0f;
+					const float pc0 = invW1 * w0 * invDenom;
+					const float pc1 = invW2 * w1 * invDenom;
+					const float pc2 = invW3 * w2 * invDenom;
 
-				const float* fa = reinterpret_cast<const float*>(v1);
-				const float* fb = reinterpret_cast<const float*>(v2);
-				const float* fc = reinterpret_cast<const float*>(v3);
-				float* fd = reinterpret_cast<float*>(&interpolated);
-				constexpr uint32_t skip = sizeof(VOutBase) / sizeof(float);
-				constexpr uint32_t count = sizeof(VOutput) / sizeof(float);
-				for (uint32_t i = skip; i < count; ++i)
-					fd[i] = fa[i] * pc0 + fb[i] * pc1 + fc[i] * pc2;
+					interpolated.position = w0 * v1->position + w1 * v2->position + w2 * v3->position;
+
+					const float* fa = reinterpret_cast<const float*>(v1);
+					const float* fb = reinterpret_cast<const float*>(v2);
+					const float* fc = reinterpret_cast<const float*>(v3);
+					float* fd = reinterpret_cast<float*>(&interpolated);
+					constexpr uint32_t skip = sizeof(VOutBase) / sizeof(float);
+					constexpr uint32_t count = sizeof(VOutput) / sizeof(float);
+					for (uint32_t i = skip; i < count; ++i)
+						fd[i] = fa[i] * pc0 + fb[i] * pc1 + fc[i] * pc2;
+				}
+				FragmentOutputOf<P> fragmentOutput{};
+				if constexpr (HasDiscardingFragmentShader<P>)
+				{
+					const std::optional<FragmentOutputOf<P>> shaded = runFragmentShader<P>(&interpolated, a.instance, uni, a.tpw);
+					if (!shaded)
+						continue;
+					fragmentOutput = *shaded;
+				}
+				else
+				{
+					fragmentOutput = runFragmentShader<P>(&interpolated, a.instance, uni, a.tpw);
+				}
+
+				glm::vec4 colors[Targets::count];
+				std::memcpy(colors, &fragmentOutput, sizeof(colors));
+
+				const uint32_t bx0 = static_cast<uint32_t>(x) * a.downsample;
+				const uint32_t by0 = static_cast<uint32_t>(y) * a.downsample;
+
+				if constexpr (HasBlendShader<P>)
+				{
+					Texture<typename Targets::template At<0>>& first = *static_cast<Texture<typename Targets::template At<0>>*>(a.framebuffers[0]);
+					colors[0] = P::blendShader(colors[0], first.getPixel(glm::uvec2(bx0, by0), true), uni);
+				}
+
+				writeTargets(a, colors, bx0, by0, Targets{});
 			}
-			glm::vec4 fragmentOutput{};
-			if constexpr (HasDiscardingFragmentShader<P>)
-			{
-				const std::optional<glm::vec4> shaded = P::fragmentShader(&interpolated, uni, a.tpw);
-				if (!shaded)
-					continue;
-				fragmentOutput = *shaded;
-			}
-			else
-			{
-				fragmentOutput = P::fragmentShader(&interpolated, uni, a.tpw);
-			}
-
-			const uint32_t bx0 = static_cast<uint32_t>(x) * ds;
-			const uint32_t by0 = static_cast<uint32_t>(y) * ds;
-
-			if constexpr (HasBlendShader<P>)
-			{
-				const glm::vec4 background = framebuffer.getPixel(glm::uvec2(bx0, by0), true);
-				fragmentOutput = P::blendShader(fragmentOutput, background, uni);
-			}
-
-			const uint32_t bx1 = glm::min(bx0 + ds, outputSize.x);
-			const uint32_t by1 = glm::min(by0 + ds, outputSize.y);
-			for (uint32_t by = by0; by < by1; ++by)
-				for (uint32_t bx = bx0; bx < bx1; ++bx)
-					framebuffer.setPixel(glm::uvec2(bx, by), fragmentOutput);
 
 			if (a.state.depthWrite)
 				depthBuffer->at(glm::uvec2(x, y)).x = depth;
@@ -352,16 +428,17 @@ void rasterizeTriangleImpl(const RasterArgs& a)
 	}
 }
 
-template <Pipeline P, PixelFormat T>
+template <HasFragmentShader P>
 PipelineID CommandBuffer::registerPipeline(const PipelineState state)
 {
 	pipelines.emplace_back(
 		&vertexRangeImpl<P>,
-		&rasterizeTriangleImpl<P, T>,
+		&rasterizeTriangleImpl<P>,
 		nullptr,
 		state,
 		sizeof(typename P::VInput),
-		sizeof(typename P::VOutput)
+		sizeof(typename P::VOutput),
+		InstancedPipeline<P>
 	);
 
 	if constexpr (HasAccurateMip<P>)
@@ -372,6 +449,22 @@ PipelineID CommandBuffer::registerPipeline(const PipelineState state)
 			return P::getUV(v);
 		};
 	}
+
+	return static_cast<PipelineID>(pipelines.size() - 1ull);
+}
+
+template <DepthOnlyPipeline P>
+PipelineID CommandBuffer::registerPipeline(const PipelineState state)
+{
+	pipelines.emplace_back(
+		&vertexRangeImpl<P>,
+		&rasterizeTriangleImpl<P>,
+		nullptr,
+		state,
+		sizeof(typename P::VInput),
+		sizeof(typename P::VOutput),
+		InstancedPipeline<P>
+	);
 
 	return static_cast<PipelineID>(pipelines.size() - 1ull);
 }
@@ -404,65 +497,52 @@ class CommandBufferRecording
 	using Uniform = P::Uniform;
 	using VInput = P::VInput;
 	using VOutput = P::VOutput;
+	using InstanceInput = InstanceInputOf<P>::type;
 
 public:
 	explicit CommandBufferRecording(const PipelineID pipelineID) : pipelineID(pipelineID) {}
 
 	void bindUniform(const Uniform& uniform) { uniformDatas.push_back(uniform); }
 
-	void draw(std::span<const VInput> vertexData)
+	void draw(std::span<const VInput> vertexData) requires (!InstancedPipeline<P>)
 	{
-		DrawCall data{
-			.vertexData = vertexData.data(),
-			.indexData = nullptr,
-			.uniformIndex = static_cast<uint32_t>(uniformDatas.size() - 1),
-			.vertexCount = static_cast<uint32_t>(vertexData.size() / 3 * 3),
-			.indexCount = 0,
-		};
-		drawCalls.push_back(data);
+		drawCalls.push_back(makeDrawCall(vertexData, nullptr, 1));
 	}
 
-	void drawIndexed(std::span<const VInput> vertexData, std::span<const uint32_t> indexData)
+	void drawIndexed(std::span<const VInput> vertexData, std::span<const uint32_t> indexData) requires (!InstancedPipeline<P>)
 	{
-		DrawCall data{
-			.vertexData = vertexData.data(),
-			.indexData = indexData.data(),
-			.uniformIndex = static_cast<uint32_t>(uniformDatas.size() - 1),
-			.vertexCount = static_cast<uint32_t>(vertexData.size()),
-			.indexCount = static_cast<uint32_t>(indexData.size() / 3 * 3),
-		};
-		drawCalls.push_back(data);
+		drawCalls.push_back(makeIndexedDrawCall(vertexData, indexData, nullptr, 1));
 	}
 
-	template<PixelFormat T>
-	void commit(CommandBuffer& commandBuffer, Texture<T>& framebuffer, Texture<glm::vec1>* depthBuffer = nullptr, const ClearState& clearState = {}) const
+	void drawInstanced(std::span<const VInput> vertexData, std::span<const InstanceInput> instanceData) requires InstancedPipeline<P>
 	{
-		CommandBuffer::DrawCallBatchCommand cmd{
-			.pipelineID = pipelineID,
-			.framebuffer = &framebuffer,
-			.depthBuffer = depthBuffer,
-			.drawCalls = {},
-		};
+		drawCalls.push_back(makeDrawCall(vertexData, instanceData.data(), static_cast<uint32_t>(instanceData.size())));
+	}
 
-		if (clearState.color)
-			cmd.colorClear = CommandBuffer::makeFillTarget(framebuffer, *clearState.color);
+	void drawIndexedInstanced(std::span<const VInput> vertexData, std::span<const uint32_t> indexData, std::span<const InstanceInput> instanceData) requires InstancedPipeline<P>
+	{
+		drawCalls.push_back(makeIndexedDrawCall(vertexData, indexData, instanceData.data(), static_cast<uint32_t>(instanceData.size())));
+	}
 
-		if (clearState.depth && depthBuffer != nullptr)
-			cmd.depthClear = CommandBuffer::makeFillTarget(*depthBuffer, glm::vec4(*clearState.depth));
+	template<PixelFormat... T> requires HasFragmentShader<P> && std::same_as<TargetList<T...>, typename P::Targets>
+	void commit(CommandBuffer& commandBuffer, const Attachments<T...>& attachments, Texture<glm::vec1>* depthBuffer = nullptr, const ClearState& clearState = {}, const std::optional<glm::uvec2> extent = std::nullopt) const
+	{
+		CommandBuffer::DrawCallBatchCommand cmd = makeBatch(depthBuffer, clearState, extent);
+		attachments.bind(cmd, clearState);
 
-		cmd.drawCalls.reserve(this->drawCalls.size());
-		for (const DrawCall& dc : this->drawCalls)
-		{
-			cmd.drawCalls.emplace_back(
-				static_cast<const void*>(&uniformDatas[dc.uniformIndex]),
-				static_cast<const void*>(dc.vertexData),
-				dc.indexData,
-				dc.vertexCount,
-				dc.indexCount
-			);
-		}
+		commandBuffer.commands.emplace_back(std::move(cmd));
+	}
 
-		commandBuffer.commands.emplace_back(cmd);
+	template<PixelFormat T> requires HasFragmentShader<P> && std::same_as<TargetList<T>, typename P::Targets>
+	void commit(CommandBuffer& commandBuffer, Texture<T>& framebuffer, Texture<glm::vec1>* depthBuffer = nullptr, const ClearState& clearState = {}, const std::optional<glm::uvec2> extent = std::nullopt) const
+	{
+		commit(commandBuffer, Attachments<T>{ framebuffer }, depthBuffer, clearState, extent);
+	}
+
+	void commit(CommandBuffer& commandBuffer, Texture<glm::vec1>& depthBuffer, const ClearState& clearState = {}, const std::optional<glm::uvec2> extent = std::nullopt) const
+		requires DepthOnlyPipeline<P>
+	{
+		commandBuffer.commands.emplace_back(makeBatch(&depthBuffer, clearState, extent));
 	}
 
 	void reserve(uint32_t drawcalls, uint32_t uniforms)
@@ -478,15 +558,74 @@ public:
 	}
 
 private:
+	[[nodiscard]] CommandBuffer::DrawCallBatchCommand makeBatch(Texture<glm::vec1>* depthBuffer, const ClearState& clearState, const std::optional<glm::uvec2> extent) const
+	{
+		CommandBuffer::DrawCallBatchCommand cmd{
+			.pipelineID = pipelineID,
+			.depthBuffer = depthBuffer,
+			.extent = extent,
+			.drawCalls = {},
+		};
+
+		if (clearState.depth && depthBuffer != nullptr)
+			cmd.depthClear = CommandBuffer::makeFillTarget(*depthBuffer, glm::vec4(*clearState.depth));
+
+		size_t expandedCount = 0;
+		for (const DrawCall& dc : this->drawCalls)
+			expandedCount += dc.instanceCount;
+
+		cmd.drawCalls.reserve(expandedCount);
+		for (const DrawCall& dc : this->drawCalls)
+		{
+			for (uint32_t instance = 0; instance < dc.instanceCount; ++instance)
+			{
+				cmd.drawCalls.emplace_back(
+					static_cast<const void*>(&uniformDatas[dc.uniformIndex]),
+					static_cast<const void*>(dc.vertexData),
+					dc.instanceData != nullptr ? static_cast<const void*>(dc.instanceData + instance) : nullptr,
+					dc.indexData,
+					dc.vertexCount,
+					dc.indexCount
+				);
+			}
+		}
+
+		return cmd;
+	}
+
 	struct DrawCall
 	{
 		const VInput* vertexData;
+		const InstanceInput* instanceData;
 		const uint32_t* indexData;
 		uint32_t uniformIndex;
 
 		uint32_t vertexCount;
 		uint32_t indexCount;
+		uint32_t instanceCount;
 	};
+
+	[[nodiscard]] DrawCall makeDrawCall(std::span<const VInput> vertexData, const InstanceInput* instanceData, const uint32_t instanceCount) const
+	{
+		return DrawCall{
+			.vertexData = vertexData.data(),
+			.instanceData = instanceData,
+			.indexData = nullptr,
+			.uniformIndex = static_cast<uint32_t>(uniformDatas.size() - 1),
+			.vertexCount = static_cast<uint32_t>(vertexData.size() / 3 * 3),
+			.indexCount = 0,
+			.instanceCount = instanceCount,
+		};
+	}
+
+	[[nodiscard]] DrawCall makeIndexedDrawCall(std::span<const VInput> vertexData, std::span<const uint32_t> indexData, const InstanceInput* instanceData, const uint32_t instanceCount) const
+	{
+		DrawCall data = makeDrawCall(vertexData, instanceData, instanceCount);
+		data.indexData = indexData.data();
+		data.vertexCount = static_cast<uint32_t>(vertexData.size());
+		data.indexCount = static_cast<uint32_t>(indexData.size() / 3 * 3);
+		return data;
+	}
 	PipelineID pipelineID;
 
 	std::vector<Uniform> uniformDatas{};

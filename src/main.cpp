@@ -1,10 +1,9 @@
 #include <glm.hpp>
 
 #include "command_buffer.hpp"
-#include "pipeline.hpp"
 #include "present.hpp"
 #include "renderer.hpp"
-#include "scenes.hpp"
+#include "multipass.hpp"
 
 #include <limits>
 
@@ -84,5 +83,5 @@ static int runApp()
 
 int main()
 {
-	return runApp<CubesScene>();
+	return runApp<PostFxScene<BloomScene<DeferredScene>>>();
 }

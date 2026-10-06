@@ -60,16 +60,40 @@ ColorPipeline::VOutput ColorPipeline::vertexShader(const VInput* vIn, const Unif
 	return vOut;
 }
 
-glm::vec4 ColorPipeline::fragmentShader(const VOutput* vOut, const Uniform* uni, const float tpw)
+BasicColorOut ColorPipeline::fragmentShader(const VOutput* vOut, const Uniform* uni, const float tpw)
 {
 	const glm::vec3 normalizedNormal = glm::normalize(vOut->normal);
 	const float diffuse = glm::max(glm::dot(normalizedNormal, -uni->lightDirection), uni->ambientMult);
 	const glm::vec4 tex = uni->tex->sample(vOut->uvCoords, tpw, 2.f);
 
-	return { diffuse * glm::vec3{tex} * glm::vec3{uni->color}, uni->color.a };
+	return BasicColorOut{ glm::vec4(diffuse * glm::vec3{tex} * glm::vec3{uni->color}, uni->color.a) };
 }
 
 glm::vec2 ColorPipeline::getUV(const VOutput* vOut)
+{
+	return vOut->uvCoords;
+}
+
+InstancedColorPipeline::VOutput InstancedColorPipeline::vertexShader(const VInput* vIn, const InstanceInput* instance, const Uniform* uni)
+{
+	VOutput vOut{};
+	vOut.position = instance->modelViewProjectionMatrix * glm::vec4(vIn->position, 1.0f);
+	vOut.normal = instance->normalMatrix * glm::vec4(vIn->normal, 0.0f);
+	vOut.uvCoords = vIn->uvcoords;
+
+	return vOut;
+}
+
+BasicColorOut InstancedColorPipeline::fragmentShader(const VOutput* vOut, const InstanceInput* instance, const Uniform* uni, const float tpw)
+{
+	const glm::vec3 normalizedNormal = glm::normalize(vOut->normal);
+	const float diffuse = glm::max(glm::dot(normalizedNormal, -uni->lightDirection), uni->ambientMult);
+	const glm::vec4 tex = uni->tex->sample(vOut->uvCoords, tpw, 2.f);
+
+	return BasicColorOut{ glm::vec4(diffuse * glm::vec3{tex} * glm::vec3{instance->color}, instance->color.a) };
+}
+
+glm::vec2 InstancedColorPipeline::getUV(const VOutput* vOut)
 {
 	return vOut->uvCoords;
 }
@@ -84,11 +108,11 @@ TranslucentPipeline::VOutput TranslucentPipeline::vertexShader(const VInput* vIn
 	return vOut;
 }
 
-glm::vec4 TranslucentPipeline::fragmentShader(const VOutput* vOut, const Uniform* uni, const float tpw)
+BasicColorOut TranslucentPipeline::fragmentShader(const VOutput* vOut, const Uniform* uni, const float tpw)
 {
 	const glm::vec4 tex = uni->tex->sample(vOut->uvCoords, tpw, 2.f);
 
-	return { glm::vec3{tex} * glm::vec3{uni->color}, uni->color.a };
+	return BasicColorOut{ glm::vec4(glm::vec3{tex} * glm::vec3{uni->color}, uni->color.a) };
 }
 
 glm::vec2 TranslucentPipeline::getUV(const VOutput* vOut)
@@ -114,12 +138,12 @@ TerrainPipeline::VOutput TerrainPipeline::vertexShader(const VInput* vIn, const 
 	return vOut;
 }
 
-glm::vec4 TerrainPipeline::fragmentShader(const VOutput* vOut, const Uniform* uni, const float tpw)
+BasicColorOut TerrainPipeline::fragmentShader(const VOutput* vOut, const Uniform* uni, const float tpw)
 {
 	const glm::vec3 normalizedNormal = glm::normalize(vOut->normal);
 	const float diffuse = glm::max(glm::dot(normalizedNormal, -uni->lightDirection), uni->ambientMult);
 
-	return { glm::vec3{diffuse} * vOut->color, 1.0f };
+	return BasicColorOut{ glm::vec4(glm::vec3{diffuse} * vOut->color, 1.0f) };
 }
 
 SolidPipeline::VOutput SolidPipeline::vertexShader(const VInput* vIn, const Uniform* uni)
@@ -130,9 +154,9 @@ SolidPipeline::VOutput SolidPipeline::vertexShader(const VInput* vIn, const Unif
 	return vOut;
 }
 
-glm::vec4 SolidPipeline::fragmentShader(const VOutput* vOut, const Uniform* uni, const float tpw)
+BasicColorOut SolidPipeline::fragmentShader(const VOutput* vOut, const Uniform* uni, const float tpw)
 {
-	return uni->color;
+	return BasicColorOut{ uni->color };
 }
 
 PaletteDisplayPipeline::VOutput PaletteDisplayPipeline::vertexShader(const VInput* vIn, const Uniform* uni)
@@ -144,11 +168,11 @@ PaletteDisplayPipeline::VOutput PaletteDisplayPipeline::vertexShader(const VInpu
 	return vOut;
 }
 
-glm::vec4 PaletteDisplayPipeline::fragmentShader(const VOutput* vOut, const Uniform* uni, const float tpw)
+BasicColorOut PaletteDisplayPipeline::fragmentShader(const VOutput* vOut, const Uniform* uni, const float tpw)
 {
 	const uint32_t index = glm::min(static_cast<uint32_t>(vOut->uvCoords.x * static_cast<float>(uni->count)), uni->count - 1);
 
-	return { uni->palette[index], 1.0f };
+	return BasicColorOut{ glm::vec4(uni->palette[index], 1.0f) };
 }
 
 void PaletteComputePipeline::computeShader(const ComputeContext& ctx, const Uniform* uni)
@@ -497,7 +521,7 @@ void makeComputePaletteMesh(std::vector<PaletteDisplayPipeline::VInput>& vertice
 
 CubesScene::CubesScene(CommandBuffer& commandBuffer)
 	: texture("../texture.png"),
-	  recording(commandBuffer.registerPipeline<ColorPipeline, glm::u8vec4>(colorState(PipelineState::CullMode::Back, true)))
+	  recording(commandBuffer.registerPipeline<InstancedColorPipeline>(colorState(PipelineState::CullMode::Back, true)))
 {
 	makeCubeMesh(vertices, indices);
 
@@ -507,7 +531,7 @@ CubesScene::CubesScene(CommandBuffer& commandBuffer)
 	uniform.lightDirection = kLightDirection;
 	uniform.ambientMult = 0.1f;
 
-	recording.reserve(125, 125);
+	recording.reserve(1, 1);
 }
 
 const char* CubesScene::name()
@@ -523,12 +547,13 @@ CameraSetup CubesScene::cameraSetup()
 void CubesScene::record(CommandBuffer& commandBuffer, Texture<glm::u8vec4>& framebuffer, Texture<glm::vec1>& depthBuffer, Camera& camera, const float time)
 {
 	constexpr ClearState clearState{
-		.color = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f),
+		.colors = { glm::vec4(0.0f, 0.0f, 0.0f, 1.0f) },
 		.depth = std::numeric_limits<float>::infinity()
 	};
 
 	recording.clear();
 
+	uint32_t instanceIndex = 0;
 	for (int z = 0; z <= 4; z++)
 	{
 		for (int x = -2; x <= 2; x++)
@@ -539,21 +564,23 @@ void CubesScene::record(CommandBuffer& commandBuffer, Texture<glm::u8vec4>& fram
 				modelMat = glm::rotate(modelMat, glm::radians(time * 5.f), glm::vec3(0.0f, 1.0f, 0.0f));
 				modelMat = glm::rotate(modelMat, glm::radians(time * 3.f), glm::vec3(1.0f, 0.0f, 0.0f));
 
-				uniform.modelViewProjectionMatrix = camera.getVPMatrix() * modelMat;
-				uniform.normalMatrix = glm::transpose(glm::inverse(modelMat));
-				uniform.color = glm::vec4(static_cast<float>(x + 2) / 5.0f, static_cast<float>(y + 2) / 5.0f, 1 - (static_cast<float>(z) / 5.0f), 1.0f);
-
-				recording.bindUniform(uniform);
-				recording.drawIndexed(vertices, indices);
+				instances[instanceIndex++] = {
+					.modelViewProjectionMatrix = camera.getVPMatrix() * modelMat,
+					.normalMatrix = glm::transpose(glm::inverse(modelMat)),
+					.color = glm::vec4(static_cast<float>(x + 2) / 5.0f, static_cast<float>(y + 2) / 5.0f, 1 - (static_cast<float>(z) / 5.0f), 1.0f),
+				};
 			}
 		}
 	}
+
+	recording.bindUniform(uniform);
+	recording.drawIndexedInstanced(vertices, indices, instances);
 
 	recording.commit(commandBuffer, framebuffer, &depthBuffer, clearState);
 }
 
 TerrainScene::TerrainScene(CommandBuffer& commandBuffer)
-	: recording(commandBuffer.registerPipeline<TerrainPipeline, glm::u8vec4>(colorState(PipelineState::CullMode::None, true)))
+	: recording(commandBuffer.registerPipeline<TerrainPipeline>(colorState(PipelineState::CullMode::None, true)))
 {
 	makeTerrainMesh(vertices, indices, 192, 300.0f);
 
@@ -576,7 +603,7 @@ CameraSetup TerrainScene::cameraSetup()
 void TerrainScene::record(CommandBuffer& commandBuffer, Texture<glm::u8vec4>& framebuffer, Texture<glm::vec1>& depthBuffer, Camera& camera, const float time)
 {
 	constexpr ClearState clearState{
-		.color = glm::vec4(0.42f, 0.58f, 0.82f, 1.0f),
+		.colors = { glm::vec4(0.42f, 0.58f, 0.82f, 1.0f) },
 		.depth = std::numeric_limits<float>::infinity()
 	};
 
@@ -592,7 +619,7 @@ void TerrainScene::record(CommandBuffer& commandBuffer, Texture<glm::u8vec4>& fr
 }
 
 TorusKnotScene::TorusKnotScene(CommandBuffer& commandBuffer)
-	: texture("../texture.png"), recording(commandBuffer.registerPipeline<ColorPipeline, glm::u8vec4>(colorState(PipelineState::CullMode::None, true)))
+	: texture("../texture.png"), recording(commandBuffer.registerPipeline<ColorPipeline>(colorState(PipelineState::CullMode::None, true)))
 {
 	makeTorusKnotMesh(vertices, indices, 192, 24, 0.42f, 3.4f);
 
@@ -619,7 +646,7 @@ CameraSetup TorusKnotScene::cameraSetup()
 void TorusKnotScene::record(CommandBuffer& commandBuffer, Texture<glm::u8vec4>& framebuffer, Texture<glm::vec1>& depthBuffer, Camera& camera, const float time)
 {
 	constexpr ClearState clearState{
-		.color = glm::vec4(0.06f, 0.07f, 0.12f, 1.0f),
+		.colors = { glm::vec4(0.06f, 0.07f, 0.12f, 1.0f) },
 		.depth = std::numeric_limits<float>::infinity()
 	};
 
@@ -639,8 +666,8 @@ void TorusKnotScene::record(CommandBuffer& commandBuffer, Texture<glm::u8vec4>& 
 
 BlendScene::BlendScene(CommandBuffer& commandBuffer)
 	: texture("../texture.png"),
-	  opaqueRecording(commandBuffer.registerPipeline<ColorPipeline, glm::u8vec4>(colorState(PipelineState::CullMode::Back, true))),
-	  paneRecording(commandBuffer.registerPipeline<TranslucentPipeline, glm::u8vec4>(colorState(PipelineState::CullMode::None, false)))
+	  opaqueRecording(commandBuffer.registerPipeline<InstancedColorPipeline>(colorState(PipelineState::CullMode::Back, true))),
+	  paneRecording(commandBuffer.registerPipeline<TranslucentPipeline>(colorState(PipelineState::CullMode::None, false)))
 {
 	makeCubeMesh(cubeVertices, cubeIndices);
 	makeBlendMesh(paneVertices, 3);
@@ -655,7 +682,7 @@ BlendScene::BlendScene(CommandBuffer& commandBuffer)
 	paneUniform.lightDirection = kLightDirection;
 	paneUniform.color = glm::vec4(0.62f, 0.78f, 0.92f, 0.45f);
 
-	opaqueRecording.reserve(24, 24);
+	opaqueRecording.reserve(1, 1);
 	paneRecording.reserve(1, 1);
 }
 
@@ -672,13 +699,14 @@ CameraSetup BlendScene::cameraSetup()
 void BlendScene::record(CommandBuffer& commandBuffer, Texture<glm::u8vec4>& framebuffer, Texture<glm::vec1>& depthBuffer, Camera& camera, const float time)
 {
 	constexpr ClearState clearState{
-		.color = glm::vec4(0.03f, 0.03f, 0.05f, 1.0f),
+		.colors = { glm::vec4(0.03f, 0.03f, 0.05f, 1.0f) },
 		.depth = std::numeric_limits<float>::infinity()
 	};
 
 	opaqueRecording.clear();
 	paneRecording.clear();
 
+	uint32_t instanceIndex = 0;
 	for (int z = 0; z <= 2; z++)
 	{
 		for (int x = -1; x <= 1; x++)
@@ -688,15 +716,17 @@ void BlendScene::record(CommandBuffer& commandBuffer, Texture<glm::u8vec4>& fram
 				glm::mat4 modelMat = glm::translate(glm::vec3(static_cast<float>(x) * 4.2f, static_cast<float>(y) * 4.2f, -6.0f - static_cast<float>(z) * 4.5f));
 				modelMat = glm::rotate(modelMat, glm::radians(time * 4.0f + static_cast<float>(x * 3 + y) * 25.0f), glm::vec3(0.0f, 1.0f, 1.0f));
 
-				opaqueUniform.modelViewProjectionMatrix = camera.getVPMatrix() * modelMat;
-				opaqueUniform.normalMatrix = glm::transpose(glm::inverse(modelMat));
-				opaqueUniform.color = glm::vec4(0.35f + static_cast<float>(x + 1) * 0.3f, 0.4f + static_cast<float>(y + 1) * 0.25f, 0.55f + static_cast<float>(z) * 0.2f, 1.0f);
-
-				opaqueRecording.bindUniform(opaqueUniform);
-				opaqueRecording.drawIndexed(cubeVertices, cubeIndices);
+				opaqueInstances[instanceIndex++] = {
+					.modelViewProjectionMatrix = camera.getVPMatrix() * modelMat,
+					.normalMatrix = glm::transpose(glm::inverse(modelMat)),
+					.color = glm::vec4(0.35f + static_cast<float>(x + 1) * 0.3f, 0.4f + static_cast<float>(y + 1) * 0.25f, 0.55f + static_cast<float>(z) * 0.2f, 1.0f),
+				};
 			}
 		}
 	}
+
+	opaqueRecording.bindUniform(opaqueUniform);
+	opaqueRecording.drawIndexedInstanced(cubeVertices, cubeIndices, opaqueInstances);
 
 	paneUniform.modelViewProjectionMatrix = camera.getVPMatrix();
 	paneUniform.normalMatrix = glm::mat4(1.0f);
@@ -710,7 +740,7 @@ void BlendScene::record(CommandBuffer& commandBuffer, Texture<glm::u8vec4>& fram
 
 MipDebugScene::MipDebugScene(CommandBuffer& commandBuffer)
 	: texture("../texture.png"),
-	  recording(commandBuffer.registerPipeline<ColorPipeline, glm::u8vec4>(colorState(PipelineState::CullMode::None, true)))
+	  recording(commandBuffer.registerPipeline<ColorPipeline>(colorState(PipelineState::CullMode::None, true)))
 {
 	makeMipDebugMesh(vertices, indices, 14);
 
@@ -737,7 +767,7 @@ CameraSetup MipDebugScene::cameraSetup()
 void MipDebugScene::record(CommandBuffer& commandBuffer, Texture<glm::u8vec4>& framebuffer, Texture<glm::vec1>& depthBuffer, Camera& camera, const float time)
 {
 	constexpr ClearState clearState{
-		.color = glm::vec4(0.05f, 0.05f, 0.06f, 1.0f),
+		.colors = { glm::vec4(0.05f, 0.05f, 0.06f, 1.0f) },
 		.depth = std::numeric_limits<float>::infinity()
 	};
 
@@ -761,7 +791,7 @@ void MipDebugScene::record(CommandBuffer& commandBuffer, Texture<glm::u8vec4>& f
 }
 
 StressScene::StressScene(CommandBuffer& commandBuffer)
-	: recording(commandBuffer.registerPipeline<SolidPipeline, glm::u8vec4>(solidState()))
+	: recording(commandBuffer.registerPipeline<SolidPipeline>(solidState()))
 {
 	makeStressMesh(vertices, uniforms, kDrawCount, kPadFillerCount);
 }
@@ -779,7 +809,7 @@ CameraSetup StressScene::cameraSetup()
 void StressScene::record(CommandBuffer& commandBuffer, Texture<glm::u8vec4>& framebuffer, Texture<glm::vec1>& depthBuffer, Camera& camera, const float time)
 {
 	constexpr ClearState clearState{
-		.color = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f),
+		.colors = { glm::vec4(0.0f, 0.0f, 0.0f, 1.0f) },
 		.depth = std::numeric_limits<float>::infinity()
 	};
 
@@ -809,7 +839,7 @@ void StressScene::record(CommandBuffer& commandBuffer, Texture<glm::u8vec4>& fra
 }
 
 ComputeScene::ComputeScene(CommandBuffer& commandBuffer)
-	: recording(commandBuffer.registerPipeline<PaletteDisplayPipeline, glm::u8vec4>(solidState()))
+	: recording(commandBuffer.registerPipeline<PaletteDisplayPipeline>(solidState()))
 {
 	palette.resize(kPaletteSize);
 	makeComputePaletteMesh(vertices);
@@ -836,7 +866,7 @@ CameraSetup ComputeScene::cameraSetup()
 void ComputeScene::record(CommandBuffer& commandBuffer, Texture<glm::u8vec4>& framebuffer, Texture<glm::vec1>& depthBuffer, Camera& camera, const float time)
 {
 	constexpr ClearState clearState{
-		.color = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f),
+		.colors = { glm::vec4(0.0f, 0.0f, 0.0f, 1.0f) },
 		.depth = std::numeric_limits<float>::infinity()
 	};
 
@@ -858,13 +888,6 @@ namespace
 	constexpr glm::vec3 kPbrLightColor{ 3.0f, 2.95f, 2.85f };
 	constexpr glm::vec3 kPbrSkyColor{ 0.35f, 0.42f, 0.55f };
 	constexpr glm::vec3 kPbrGroundColor{ 0.12f, 0.10f, 0.09f };
-
-	constexpr float kScreenUpAxisSign = -1.0f;
-
-	glm::mat4 screenUpCorrection()
-	{
-		return glm::scale(glm::mat4{ 1.0f }, glm::vec3(1.0f, kScreenUpAxisSign, 1.0f));
-	}
 }
 
 PbrPipeline::VOutput PbrPipeline::vertexShader(const VInput* vIn, const Uniform* uni)
@@ -878,7 +901,7 @@ PbrPipeline::VOutput PbrPipeline::vertexShader(const VInput* vIn, const Uniform*
 	return vOut;
 }
 
-std::optional<glm::vec4> PbrPipeline::fragmentShader(const VOutput* vOut, const Uniform* uni, const float tpw)
+std::optional<BasicColorOut> PbrPipeline::fragmentShader(const VOutput* vOut, const Uniform* uni, const float tpw)
 {
 	const glm::vec3 normal = glm::normalize(vOut->worldNormal);
 	const glm::vec3 view = glm::normalize(uni->cameraPosition - vOut->worldPosition);
@@ -944,13 +967,13 @@ std::optional<glm::vec4> PbrPipeline::fragmentShader(const VOutput* vOut, const 
 
 	color = color / (color + glm::vec3(1.0f));
 
-	return glm::vec4{ glm::clamp(color, 0.0f, 1.0f), baseColor.a };
+	return BasicColorOut{ glm::vec4{ glm::clamp(color, 0.0f, 1.0f), baseColor.a } };
 }
 
 GltfScene::GltfScene(CommandBuffer& commandBuffer)
 	: model(loadGltf(kModelPath)),
-	  recording(commandBuffer.registerPipeline<PbrPipeline, glm::u8vec4>(colorState(PipelineState::CullMode::Back, true))),
-	  doubleSidedRecording(commandBuffer.registerPipeline<PbrPipeline, glm::u8vec4>(colorState(PipelineState::CullMode::None, true)))
+	  recording(commandBuffer.registerPipeline<PbrPipeline>(colorState(PipelineState::CullMode::Back, true))),
+	  doubleSidedRecording(commandBuffer.registerPipeline<PbrPipeline>(colorState(PipelineState::CullMode::None, true)))
 {
 	for (uint32_t i = 0; i < static_cast<uint32_t>(model.primitives.size()); ++i)
 	{
@@ -985,7 +1008,7 @@ CameraSetup GltfScene::cameraSetup()
 void GltfScene::record(CommandBuffer& commandBuffer, Texture<glm::u8vec4>& framebuffer, Texture<glm::vec1>& depthBuffer, Camera& camera, const float time)
 {
 	constexpr ClearState clearState{
-		.color = glm::vec4(0.02f, 0.02f, 0.025f, 1.0f),
+		.colors = { glm::vec4(0.02f, 0.02f, 0.025f, 1.0f) },
 		.depth = std::numeric_limits<float>::infinity()
 	};
 
@@ -997,7 +1020,7 @@ void GltfScene::record(CommandBuffer& commandBuffer, Texture<glm::u8vec4>& frame
 		return model.textures[static_cast<size_t>(textureIndex)].get();
 	};
 
-	const glm::mat4 modelMatrix = screenUpCorrection() * glm::rotate(glm::mat4{ 1.0f }, glm::radians(time * kRotateSpeed), glm::vec3(0.0f, 1.0f, 0.0f));
+	const glm::mat4 modelMatrix = glm::rotate(glm::mat4{ 1.0f }, glm::radians(time * kRotateSpeed), glm::vec3(0.0f, 1.0f, 0.0f));
 
 	uniform.modelViewProjectionMatrix = camera.getVPMatrix() * modelMatrix;
 	uniform.modelMatrix = modelMatrix;

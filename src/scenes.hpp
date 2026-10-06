@@ -1,5 +1,6 @@
 #pragma once
 #include <glm.hpp>
+#include <array>
 #include <concepts>
 #include <cstdint>
 #include <limits>
@@ -62,9 +63,10 @@ public:
 	typedef UniformStruct Uniform;
 	typedef VIn VInput;
 	typedef VOut VOutput;
+	typedef TargetList<glm::u8vec4> Targets;
 
 	static VOutput vertexShader(const VInput* vIn, const Uniform* uni);
-	static std::optional<glm::vec4> fragmentShader(const VOutput* vOut, const Uniform* uni, const float tpw);
+	static std::optional<BasicColorOut> fragmentShader(const VOutput* vOut, const Uniform* uni, const float tpw);
 };
 
 class GltfScene
@@ -118,9 +120,44 @@ public:
 	typedef UniformStruct Uniform;
 	typedef VIn VInput;
 	typedef VOut VOutput;
+	typedef TargetList<glm::u8vec4> Targets;
 
 	static VOutput vertexShader(const VInput* vIn, const Uniform* uni);
-	static glm::vec4 fragmentShader(const VOutput* vOut, const Uniform* uni, const float tpw);
+	static BasicColorOut fragmentShader(const VOutput* vOut, const Uniform* uni, const float tpw);
+	static glm::vec2 getUV(const VOutput* vOut);
+};
+
+class InstancedColorPipeline
+{
+public:
+	struct UniformStruct
+	{
+		MipTexture<glm::u8vec4>* tex;
+		glm::vec3 lightDirection;
+		float ambientMult;
+	};
+
+	struct InstanceStruct
+	{
+		glm::mat4 modelViewProjectionMatrix;
+		glm::mat4 normalMatrix;
+		glm::vec4 color;
+	};
+
+	struct VOut : VOutBase
+	{
+		glm::vec3 normal;
+		glm::vec2 uvCoords;
+	};
+
+	typedef UniformStruct Uniform;
+	typedef InstanceStruct InstanceInput;
+	typedef ColorPipeline::VIn VInput;
+	typedef VOut VOutput;
+	typedef TargetList<glm::u8vec4> Targets;
+
+	static VOutput vertexShader(const VInput* vIn, const InstanceInput* instance, const Uniform* uni);
+	static BasicColorOut fragmentShader(const VOutput* vOut, const InstanceInput* instance, const Uniform* uni, const float tpw);
 	static glm::vec2 getUV(const VOutput* vOut);
 };
 
@@ -153,9 +190,10 @@ public:
 	typedef UniformStruct Uniform;
 	typedef VIn VInput;
 	typedef VOut VOutput;
+	typedef TargetList<glm::u8vec4> Targets;
 
 	static VOutput vertexShader(const VInput* vIn, const Uniform* uni);
-	static glm::vec4 fragmentShader(const VOutput* vOut, const Uniform* uni, const float tpw);
+	static BasicColorOut fragmentShader(const VOutput* vOut, const Uniform* uni, const float tpw);
 	static glm::vec2 getUV(const VOutput* vOut);
 	static glm::vec4 blendShader(const glm::vec4& src, const glm::vec4& dst, const Uniform* uni);
 };
@@ -187,9 +225,10 @@ public:
 	typedef UniformStruct Uniform;
 	typedef VIn VInput;
 	typedef VOut VOutput;
+	typedef TargetList<glm::u8vec4> Targets;
 
 	static VOutput vertexShader(const VInput* vIn, const Uniform* uni);
-	static glm::vec4 fragmentShader(const VOutput* vOut, const Uniform* uni, const float tpw);
+	static BasicColorOut fragmentShader(const VOutput* vOut, const Uniform* uni, const float tpw);
 };
 
 class SolidPipeline
@@ -213,9 +252,10 @@ public:
 	typedef UniformStruct Uniform;
 	typedef VIn VInput;
 	typedef VOut VOutput;
+	typedef TargetList<glm::u8vec4> Targets;
 
 	static VOutput vertexShader(const VInput* vIn, const Uniform* uni);
-	static glm::vec4 fragmentShader(const VOutput* vOut, const Uniform* uni, const float tpw);
+	static BasicColorOut fragmentShader(const VOutput* vOut, const Uniform* uni, const float tpw);
 };
 
 class PaletteDisplayPipeline
@@ -241,9 +281,10 @@ public:
 	typedef UniformStruct Uniform;
 	typedef VIn VInput;
 	typedef VOut VOutput;
+	typedef TargetList<glm::u8vec4> Targets;
 
 	static VOutput vertexShader(const VInput* vIn, const Uniform* uni);
-	static glm::vec4 fragmentShader(const VOutput* vOut, const Uniform* uni, const float tpw);
+	static BasicColorOut fragmentShader(const VOutput* vOut, const Uniform* uni, const float tpw);
 };
 
 class PaletteComputePipeline
@@ -281,6 +322,8 @@ void makeComputePaletteMesh(std::vector<PaletteDisplayPipeline::VInput>& vertice
 class CubesScene
 {
 public:
+	static constexpr uint32_t kCubeCount = 125;
+
 	explicit CubesScene(CommandBuffer& commandBuffer);
 
 	static const char* name();
@@ -292,8 +335,9 @@ private:
 	std::vector<ColorPipeline::VInput> vertices;
 	std::vector<uint32_t> indices;
 	MipTexture<glm::u8vec4> texture;
-	ColorPipeline::Uniform uniform;
-	CommandBufferRecording<ColorPipeline> recording;
+	InstancedColorPipeline::Uniform uniform;
+	std::array<InstancedColorPipeline::InstanceInput, kCubeCount> instances;
+	CommandBufferRecording<InstancedColorPipeline> recording;
 };
 
 class TerrainScene
@@ -334,6 +378,8 @@ private:
 class BlendScene
 {
 public:
+	static constexpr uint32_t kOpaqueCount = 27;
+
 	explicit BlendScene(CommandBuffer& commandBuffer);
 
 	static const char* name();
@@ -346,9 +392,10 @@ private:
 	std::vector<uint32_t> cubeIndices;
 	std::vector<TranslucentPipeline::VInput> paneVertices;
 	MipTexture<glm::u8vec4> texture;
-	ColorPipeline::Uniform opaqueUniform;
+	InstancedColorPipeline::Uniform opaqueUniform;
+	std::array<InstancedColorPipeline::InstanceInput, kOpaqueCount> opaqueInstances;
 	TranslucentPipeline::Uniform paneUniform;
-	CommandBufferRecording<ColorPipeline> opaqueRecording;
+	CommandBufferRecording<InstancedColorPipeline> opaqueRecording;
 	CommandBufferRecording<TranslucentPipeline> paneRecording;
 };
 

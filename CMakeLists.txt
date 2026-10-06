@@ -63,6 +63,7 @@ add_executable(SoftwareRasterizer
     src/renderer.cpp
     src/camera.cpp
     src/scenes.cpp
+    src/multipass.cpp
     src/gltf.cpp
     src/tinygltf_impl.cpp
     src/texture.cpp
@@ -73,6 +74,7 @@ add_executable(SoftwareRasterizer
     src/renderer.hpp
     src/camera.hpp
     src/scenes.hpp
+    src/multipass.hpp
     src/gltf.hpp
     src/texture.hpp
     src/shader_utils.hpp

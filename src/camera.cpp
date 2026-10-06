@@ -166,7 +166,7 @@ void Camera::mouseMoved(const float relX, const float relY)
 {
     if (!m_isMouseCaptured) return;
 	m_yaw += relX * m_mouseSensitivity;
-    m_pitch += relY * m_mouseSensitivity;
+    m_pitch -= relY * m_mouseSensitivity;
 
     m_pitch = std::min(m_pitch, 89.0f);
     m_pitch = std::max(m_pitch, -89.0f);
@@ -271,11 +271,11 @@ void Camera::updateEvents(const float delta)
 	}
 	if (m_spacePressed)
 	{
-		moveDir -= glm::vec3(0.0f, 1.0f, 0.0f);
+		moveDir += glm::vec3(0.0f, 1.0f, 0.0f);
 	}
 	if (m_shiftPressed)
 	{
-		moveDir += glm::vec3(0.0f, 1.0f, 0.0f);
+		moveDir -= glm::vec3(0.0f, 1.0f, 0.0f);
 	}
 
 	if (moveDir.x != 0.f || moveDir.y != 0.f || moveDir.z != 0.f)

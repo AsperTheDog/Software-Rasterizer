@@ -3,16 +3,16 @@
 
 
 Renderer::Renderer()
-	: framesize(800, 600),
-	cpuCount(std::max<uint32_t>(1, std::thread::hardware_concurrency())),
-	phaseBarrier(cpuCount + 1)
+	: framesize(800, 600), activeExtent(framesize), cpuCount(std::max<uint32_t>(1, std::thread::hardware_concurrency())), phaseBarrier(cpuCount + 1)
 {
 	currentPhase.store(Phase::Idle);
 	prevFrame = std::chrono::steady_clock::now();
 	vertexStarts.resize(cpuCount);
 
-	for (uint32_t i = 0; i < cpuCount; ++i) {
-		threads.emplace_back([this, i](const std::stop_token& stopToken) {
+	for (uint32_t i = 0; i < cpuCount; ++i) 
+	{
+		threads.emplace_back([this, i](const std::stop_token& stopToken) 
+		{
 			threadRun(stopToken, i);
 		});
 	}
@@ -64,9 +64,18 @@ void Renderer::execute(const CommandBuffer& commandBuffer)
 				currentDrawCall = &arg;
 				currentPipeline = &commandBuffer.pipelines[arg.pipelineID];
 
+				const glm::uvec2 extent = arg.extent.value_or(framesize);
+				activeDownsample = arg.extent ? 1u : downsample;
+				if (extent != activeExtent)
+				{
+					activeExtent = extent;
+					initTiles();
+				}
+
 				currentClearTargetCount = 0;
-				if (arg.colorClear)
-					currentClearTargets[currentClearTargetCount++] = *arg.colorClear;
+				for (const std::optional<CommandBuffer::FillTarget>& colorClear : arg.colorClears)
+					if (colorClear)
+						currentClearTargets[currentClearTargetCount++] = *colorClear;
 				if (arg.depthClear)
 					currentClearTargets[currentClearTargetCount++] = *arg.depthClear;
 				if (currentClearTargetCount > 0)
@@ -86,7 +95,8 @@ void Renderer::execute(const CommandBuffer& commandBuffer)
 							.triBase = triangles, 
 							.triCount = triCount,
 							.indexData = drawCall.indexData, 
-							.uniform = drawCall.uniform });
+							.uniform = drawCall.uniform,
+							.instance = drawCall.instanceData });
 					}
 
 					vertices += drawCall.vertexCount;
@@ -95,6 +105,8 @@ void Renderer::execute(const CommandBuffer& commandBuffer)
 				totalTriangles = triangles;
 				totalVertices = vertices;
 				triangleUniforms.resize(triangles);
+				if (currentPipeline->instanced)
+					triangleInstances.resize(triangles);
 				const uint32_t binNodeDemand = binNodesPerTile * static_cast<uint32_t>(tiles.size()) + binNodesPerTriangle * triangles;
 				if (binNodeDemand > binningScratchpad.size())
 					binningScratchpad.resize(std::min(binNodeDemand, maxBinNodes));
@@ -258,11 +270,12 @@ void Renderer::threadRunVertex(const uint32_t threadID) {
 
 		VertexArgs args{
 			.vertexInput = srcVertexBytes,
+			.instanceInput = drawCall.instanceData,
 			.uniform = drawCall.uniform,
 			.vertexOutput = dstGeometryBytes,
 			.clipcodes = clipcodes.data() + currentIdx,
 			.vertexCount = verticesToProcess,
-			.framesize = framesize
+			.framesize = activeExtent
 		};
 
 		vertexRange(args);
@@ -290,11 +303,11 @@ static bool cullTriangle(const glm::vec3& v0, const glm::vec3& v1, const glm::ve
 
 	if (mode == PipelineState::CullMode::Back) 
 	{
-		return crossZ < 0.0f;
+		return crossZ > 0.0f;
 	}
 	if (mode == PipelineState::CullMode::Front) 
 	{
-		return crossZ > 0.0f;
+		return crossZ < 0.0f;
 	}
 
 	return false;
@@ -310,8 +323,9 @@ const VOutBase* Renderer::resolveVertex(const uint32_t slot, const uint32_t vOut
 void Renderer::threadRunBinning()
 {
 	const uint32_t vOutStride = currentPipeline->vOutStride;
+	const bool instanced = currentPipeline->instanced;
 	const PipelineState::CullMode cullMode = currentPipeline->state.cullMode;
-	const glm::ivec2 maxTileIndex = glm::ivec2((framesize.x + 15u) / 16u, (framesize.y + 15u) / 16u) - glm::ivec2(1);
+	const glm::ivec2 maxTileIndex = glm::ivec2((activeExtent.x + 15u) / 16u, (activeExtent.y + 15u) / 16u) - glm::ivec2(1);
 
 	if (tiles.empty())
 		return;
@@ -333,13 +347,13 @@ void Renderer::threadRunBinning()
 		VOutBase* out = reinterpret_cast<VOutBase*>(dst);
 		const float oneOverW = 1.0f / out->clipPosition.w;
 		out->position = out->clipPosition * oneOverW;
-		out->position.x = (out->position.x + 1.0f) * 0.5f * static_cast<float>(framesize.x);
-		out->position.y = (out->position.y + 1.0f) * 0.5f * static_cast<float>(framesize.y);
+		out->position.x = (out->position.x + 1.0f) * 0.5f * static_cast<float>(activeExtent.x);
+		out->position.y = (1.0f - out->position.y) * 0.5f * static_cast<float>(activeExtent.y);
 		out->position.w = oneOverW;
 		return idx | CULL_BIT;
 	};
 
-	const auto emitTriangle = [&](const uint32_t triID, const void* uniform, const uint32_t sa, const uint32_t sb, const uint32_t sc)
+	const auto emitTriangle = [&](const uint32_t triID, const DrawInfo& info, const uint32_t sa, const uint32_t sb, const uint32_t sc)
 	{
 		const VOutBase* a = resolveVertex(sa, vOutStride);
 		const VOutBase* b = resolveVertex(sb, vOutStride);
@@ -382,7 +396,9 @@ void Renderer::threadRunBinning()
 		const glm::ivec2 tileMin = glm::ivec2(tileMinF);
 		const glm::ivec2 tileMax = glm::ivec2(tileMaxF);
 
-		triangleUniforms[triID] = uniform;
+		triangleUniforms[triID] = info.uniform;
+		if (instanced)
+			triangleInstances[triID] = info.instance;
 
 		for (int32_t y = tileMin.y; y <= tileMax.y; ++y)
 		{
@@ -459,7 +475,7 @@ void Renderer::threadRunBinning()
 
 			if (((c0 | c1 | c2) & CLIP_NEAR_PLANE) == 0)
 			{
-				emitTriangle(nextTri, info.uniform, slot[0], slot[1], slot[2]);
+				emitTriangle(nextTri, info, slot[0], slot[1], slot[2]);
 				continue;
 			}
 
@@ -497,7 +513,7 @@ void Renderer::threadRunBinning()
 				}
 			}
 			for (uint32_t k = 1; k + 1 < polyCount; ++k)
-				emitTriangle(nextTri, info.uniform, poly[0], poly[k], poly[k + 1]);
+				emitTriangle(nextTri, info, poly[0], poly[k], poly[k + 1]);
 		}
 	}
 }
@@ -508,6 +524,7 @@ void Renderer::threadRunFragment()
 
 	const CommandBuffer::DrawCallBatchCommand& batch = *currentDrawCall;
 	const uint32_t vOutStride = currentPipeline->vOutStride;
+	const bool instanced = currentPipeline->instanced;
 
 	while (true)
 	{
@@ -546,7 +563,7 @@ void Renderer::threadRunFragment()
 			const glm::vec2 bboxMax = glm::max(glm::max(p1, p2), p3);
 
 			const glm::vec2 tileMin = glm::vec2(tileCoords);
-			const glm::vec2 tileMax = glm::vec2(glm::min(tileCoords + glm::ivec2(15), glm::ivec2(framesize) - glm::ivec2(1)));
+			const glm::vec2 tileMax = glm::vec2(glm::min(tileCoords + glm::ivec2(15), glm::ivec2(activeExtent) - glm::ivec2(1)));
 			const glm::ivec2 start = glm::ivec2(glm::clamp(bboxMin, tileMin, tileMax));
 			const glm::ivec2 end = glm::ivec2(glm::clamp(bboxMax, tileMin, tileMax));
 
@@ -559,12 +576,13 @@ void Renderer::threadRunFragment()
 				.v2 = v2,
 				.v3 = v3,
 				.uniform = triangleUniforms[node.triangleID],
-				.framebuffer = batch.framebuffer,
+				.instance = instanced ? triangleInstances[node.triangleID] : nullptr,
+				.framebuffers = batch.framebuffers.data(),
 				.depthBuffer = batch.depthBuffer,
 				.start = start,
 				.end = end,
 				.invArea = 1.0f / triangleArea,
-				.downsample = downsample,
+				.downsample = activeDownsample,
 				.tpw = node.tpw,
 				.state = state,
 			};
@@ -635,6 +653,6 @@ void Renderer::threadRunClear(const uint32_t threadID)
 void Renderer::initTiles()
 {
 	tiles.clear();
-	tileRowSize = (framesize.x + 15) / 16;
-	tiles.resize(static_cast<size_t>(tileRowSize) * ((framesize.y + 15) / 16));
+	tileRowSize = (activeExtent.x + 15) / 16;
+	tiles.resize(static_cast<size_t>(tileRowSize) * ((activeExtent.y + 15) / 16));
 }

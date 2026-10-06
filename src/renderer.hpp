@@ -22,6 +22,8 @@ public:
 	{
 		downsample = downsampleFactor;
 		framesize = (newSize + glm::uvec2(downsampleFactor - 1u)) / downsampleFactor;
+		activeExtent = framesize;
+		activeDownsample = downsample;
 		initTiles();
 	}
 
@@ -54,6 +56,7 @@ private:
 		uint32_t triCount;
 		const uint32_t* indexData;
 		const void* uniform;
+		const void* instance;
 	};
 
 	struct VertexStart {
@@ -97,6 +100,8 @@ private:
 
 	glm::uvec2 framesize;
 	uint32_t downsample = 1;
+	glm::uvec2 activeExtent;
+	uint32_t activeDownsample = 1;
 
 	std::vector<uint8_t> geometryScratchpad;
 	std::vector<uint8_t> cullGeomScratchpad;
@@ -110,6 +115,7 @@ private:
 	uint32_t totalVertices = 0;
 	std::vector<VertexStart> vertexStarts;
 	std::vector<const void*> triangleUniforms;
+	std::vector<const void*> triangleInstances;
 
 	std::atomic<uint32_t> triangleCounter{ 0 };
 	std::atomic<uint32_t> binningCounter{ 0 };
@@ -127,7 +133,7 @@ private:
 	const CommandBuffer::DrawCallBatchCommand* currentDrawCall = nullptr;
 	const CommandBuffer::PipelineData* currentPipeline = nullptr;
 	const CommandBuffer::ComputeCommand* currentComputeCall = nullptr;
-	CommandBuffer::FillTarget currentClearTargets[2];
+	CommandBuffer::FillTarget currentClearTargets[kMaxColorTargets + 1];
 	uint32_t currentClearTargetCount = 0;
 
 	double vertexTime = 0.0f, binningTime = 0.0f, fragmentTime = 0.0f, frameTime = 0.0f, computeTime = 0.0f, clearTime = 0.0f;
