@@ -45,8 +45,24 @@ This is a very simple Cpp 20 project. The main two dependencies are the header o
 
 <img width="1922" height="1119" alt="image" src="https://github.com/user-attachments/assets/74a5a187-c1a7-4351-88de-289cfcffb853" />
 
-Capture of the render loop created in [main.cpp](https://github.com/AsperTheDog/Software-Rasterizer/blob/main/src/main.cpp). It uses a simple diffuse lighting pipeline and renders a cube 125 times with slightly different model matrices and colors defined in the uniforms, they also have a texture which is sampled with mipmapping using trilinear filtering. The render is done to an SRGB image which is then shown through an SDL3 window.
+Capture of the cubes scene from [scenes.hpp](https://github.com/AsperTheDog/Software-Rasterizer/blob/main/src/scenes.hpp). It uses a simple diffuse lighting pipeline and renders a cube 125 times with slightly different model matrices and colors defined in the uniforms, they also have a texture which is sampled with mipmapping using trilinear filtering. The render is done to an SRGB image which is then shown through an SDL3 window.
 
 <img width="2560" height="1380" alt="image" src="https://github.com/user-attachments/assets/1dae0e9a-209b-4b43-b021-e95eca43f6bf" />
 
 Capture of the same render loop than the previous image, but the output is being shown through the terminal. SDL3 is completely optional and chosen in the CMake config. The screen tearing is inevitable because the terminal is so slow you see it sweeping its text to change frames.
+
+---
+
+<img width="1922" height="1119" alt="image" src="https://github.com/user-attachments/assets/31cc26da-f83d-4659-8697-23e60cc71d24" />
+
+Capture of a helmet GLB using PRB rendering, it uses the GLTF scene defined in [scenes.hpp](https://github.com/AsperTheDog/Software-Rasterizer/blob/main/src/scenes.hpp).
+
+<img width="1922" height="1119" alt="image" src="https://github.com/user-attachments/assets/58a0b7fe-7bbb-49af-bd30-cec2be762ce5" />
+
+Captura of a Torus Knot created using the Torus Knot Scene, defined in [scenes.hpp](https://github.com/AsperTheDog/Software-Rasterizer/blob/main/src/scenes.hpp)
+
+<img width="1922" height="1119" alt="image" src="https://github.com/user-attachments/assets/0d42e248-f17d-4b6e-84e6-c5103fea4b34" />
+
+Capture of Sponza using PBR rendering, it uses the same pipeline and scene system as with the helmet.
+
+
