@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <cstring>
 #include <glm.hpp>
+#include <limits>
 #include <optional>
 #include <span>
 #include <variant>
@@ -215,6 +216,12 @@ void vertexRangeImpl(const VertexArgs& args)
 	}
 }
 
+inline float fillRuleBias(const float stepX, const float stepY)
+{
+	const bool topLeft = stepX > 0.0f || (stepX == 0.0f && stepY > 0.0f);
+	return topLeft ? 0.0f : std::numeric_limits<float>::denorm_min();
+}
+
 template<Pipeline P, PixelFormat T>
 void rasterizeTriangleImpl(const RasterArgs& a)
 {
@@ -236,17 +243,29 @@ void rasterizeTriangleImpl(const RasterArgs& a)
 	const glm::vec2 p2 = glm::vec2(v2->position);
 	const glm::vec2 p3 = glm::vec2(v3->position);
 
+	const float orientation = std::copysign(1.0f, a.invArea);
+	const float weightScale = std::abs(a.invArea);
+
+	const glm::vec3 edgeStepX = orientation * glm::vec3(p2.y - p3.y, p3.y - p1.y, p1.y - p2.y);
+	const glm::vec3 edgeStepY = orientation * glm::vec3(p3.x - p2.x, p1.x - p3.x, p2.x - p1.x);
+	const glm::vec3 edgeBias(fillRuleBias(edgeStepX.x, edgeStepY.x), fillRuleBias(edgeStepX.y, edgeStepY.y), fillRuleBias(edgeStepX.z, edgeStepY.z));
+
+	const glm::vec3 edgeOriginX(p2.x, p3.x, p1.x);
+	const glm::vec3 edgeOriginY(p2.y, p3.y, p1.y);
+
 	for (int32_t y = a.start.y; y <= a.end.y; ++y)
 	{
 		for (int32_t x = a.start.x; x <= a.end.x; ++x)
 		{
 			const glm::vec2 pixelCenter = glm::vec2(static_cast<float>(x) + 0.5f, static_cast<float>(y) + 0.5f);
-			const float w0 = ((p3.x - p2.x) * (pixelCenter.y - p2.y) - (p3.y - p2.y) * (pixelCenter.x - p2.x)) * a.invArea;
-			const float w1 = ((p1.x - p3.x) * (pixelCenter.y - p3.y) - (p1.y - p3.y) * (pixelCenter.x - p3.x)) * a.invArea;
-			const float w2 = 1.0f - w0 - w1;
+			const glm::vec3 edge = edgeStepX * (pixelCenter.x - edgeOriginX) + edgeStepY * (pixelCenter.y - edgeOriginY);
 
-			if (w0 < 0.0f || w1 < 0.0f || w2 < 0.0f)
+			if (edge.x < edgeBias.x || edge.y < edgeBias.y || edge.z < edgeBias.z)
 				continue;
+
+			const float w0 = edge.x * weightScale;
+			const float w1 = edge.y * weightScale;
+			const float w2 = 1.0f - w0 - w1;
 
 			const float depth = w0 * v1->position.z + w1 * v2->position.z + w2 * v3->position.z;
 			if (depth > 1.0f)

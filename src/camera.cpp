@@ -5,7 +5,9 @@
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/transform.hpp>
 
-#include <SDL2/SDL_keycode.h>
+#ifdef SDL_OUTPUT
+#include <SDL3/SDL_keycode.h>
+#endif
 
 Camera::Camera(const glm::vec3 pos, const glm::vec3 dir, const float fov, const float near, const float far)
 	: m_Position(pos), m_Front(dir), m_fov(fov), m_near(near), m_far(far)
@@ -180,7 +182,7 @@ void Camera::mouseMoved(const float relX, const float relY)
     setDir(newFront);
 }
 
-void Camera::keyPressed(const uint32_t key)
+void Camera::keyPressed([[maybe_unused]] const uint32_t key)
 {
     if (!m_isMouseCaptured)
     {
@@ -192,18 +194,19 @@ void Camera::keyPressed(const uint32_t key)
         m_shiftPressed = false;
         return;
     }
+#ifdef SDL_OUTPUT
 	switch (key)
 	{
-	case SDLK_w:
+	case SDLK_W:
 		m_wPressed = true;
 		break;
-	case SDLK_s:
+	case SDLK_S:
 		m_sPressed = true;
 		break;
-	case SDLK_a:
+	case SDLK_A:
 		m_aPressed = true;
 		break;
-	case SDLK_d:
+	case SDLK_D:
 		m_dPressed = true;
 		break;
 	case SDLK_SPACE:
@@ -215,22 +218,24 @@ void Camera::keyPressed(const uint32_t key)
 	default:
 		break;
 	}
+#endif
 }
 
-void Camera::keyReleased(const uint32_t key)
+void Camera::keyReleased([[maybe_unused]] const uint32_t key)
 {
+#ifdef SDL_OUTPUT
 	switch (key)
 	{
-	case SDLK_w:
+	case SDLK_W:
 		m_wPressed = false;
 		break;
-	case SDLK_s:
+	case SDLK_S:
 		m_sPressed = false;
 		break;
-	case SDLK_a:
+	case SDLK_A:
 		m_aPressed = false;
 		break;
-	case SDLK_d:
+	case SDLK_D:
 		m_dPressed = false;
 		break;
 	case SDLK_SPACE:
@@ -242,6 +247,7 @@ void Camera::keyReleased(const uint32_t key)
 	default:
 		break;
 	}
+#endif
 }
 
 void Camera::updateEvents(const float delta)

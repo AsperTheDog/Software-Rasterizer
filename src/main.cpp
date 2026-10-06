@@ -84,5 +84,5 @@ static int runApp()
 
 int main()
 {
-	return runApp<GltfScene>();
+	return runApp<CubesScene>();
 }

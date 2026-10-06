@@ -1,6 +1,7 @@
 #pragma once
 #include <algorithm>
 #include <bit>
+#include <cstring>
 #include <glm.hpp>
 #include <string_view>
 
@@ -228,23 +229,20 @@ public:
 
     glm::vec4 getPixel(const glm::uvec2 coords, const bool quantize = true)
     {
-		glm::vec4 pixel = glm::vec4(pixels[getPixelIndex(coords)]);
-        if constexpr (!std::is_floating_point_v<typename Pixel::value_type>)
-        {
-	        if (quantize)
-	        {
-	        	constexpr float elemSize = std::numeric_limits<typename Pixel::value_type>::max();
-	        	pixel = pixel / elemSize;
-	        }
-        }
-
-        if (quantize && format == SRGB)
-            pixel = ShaderUtils::srgbToLinear(pixel);
-		return pixel;
+		return decodeSample(glm::vec4(pixels[getPixelIndex(coords)]), quantize);
     }
 
     void setPixel(const glm::uvec2 coord, glm::vec4 color, const bool quantize = true, const Format srcFormat = UNORM)
     {
+        if constexpr (std::is_same_v<typename Pixel::value_type, uint8_t>)
+        {
+            if (quantize && srcFormat == UNORM && format == SRGB)
+            {
+                pixels[getPixelIndex(coord)] = Pixel(ShaderUtils::linearToSrgb8(color));
+                return;
+            }
+        }
+
         if (srcFormat == SRGB && format == UNORM)
         {
             color = ShaderUtils::srgbToLinear(color);
@@ -309,6 +307,12 @@ private:
 
     [[nodiscard]] glm::vec4 decodeSample(glm::vec4 color, const bool normalized) const
     {
+        if constexpr (std::is_same_v<typename Pixel::value_type, uint8_t>)
+        {
+            if (normalized && format == SRGB)
+                return ShaderUtils::srgb8ToLinear(color);
+        }
+
         color = normalizePixel(color, normalized);
         if (normalized && format == SRGB)
             color = ShaderUtils::srgbToLinear(color);

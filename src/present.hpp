@@ -6,7 +6,7 @@
 #include <glm.hpp>
 
 #include "camera.hpp"
-#include "Texture.hpp"
+#include "texture.hpp"
 
 template<typename T>
 concept Output = requires(T t, Texture<glm::u8vec4>* tex, float vertexTime, float binningTime, float fragmentTime, float frameTime, Camera& cam) {
