@@ -2,33 +2,31 @@
 CPU rasterizer made to be highly optimized and mimicking Vulkan's Pipeline Object + Command Buffer design.
 
 # Overview
-The rasterizer is a CPU implementation of a Vulkan-style rendering model, built so that user code reads like the host side of a graphics API. A pipeline is a plain C++ class that declares its own types (vertex input, uniform, vertex output, optional per-instance input and the formats of its render targets) next to static shader functions. Concepts validate it at compile time, and every optional stage (discarding, blending, mipmap derivatives, instancing, fragment output at all) is resolved statically, so a pipeline only pays for what it declares. Rendering always writes to previously allocated textures, and a frame is just a sequence of batches committed to a command buffer, which is why multipass techniques need no special support. Everything the renderer needs to know about a batch (clears, attachments, extent) travels as data inside the command buffer.
+This is a CPU rasterizer I built to see how far I could take Vulkan's way of structuring a renderer without a GPU. Pipelines and command buffers are the core of it, and I wanted the code you write against it to look like the host side of a graphics API, instead of just a typical software renderer where you call a draw function and get pixels. I of course wanted it fast, so most of the work has gone into threading the pipeline stages and tuning the hot paths. Features were added whenever a technique I wanted to try (like shadow maps, deferred shading, bloom or instancing) needed something the API didn't have yet, and at each point I used the Vulkan equivalent as inspiration where it made sense. The list below shows what exists and what it maps to.
 
 # Features
-The Vulkan equivalent of each feature is shown in parentheses.
+I left the Vulkan "equivalent" of each feature shown in parentheses where applicable.
 
 - **Programmable pipelines**: Vertex input, uniform and vertex output are user types, validated by concepts (graphics pipeline with vertex and fragment shader modules)
 - **Command buffer**: Recording scopes batch draws per pipeline and are committed into a command buffer that the renderer executes (`VkCommandBuffer`, `vkCmdBindPipeline`, `vkQueueSubmit`)
 - **Draws**: Indexed and non-indexed, each with the uniform bound at record time (`vkCmdDraw`, `vkCmdDrawIndexed`, uniform buffers or push constants)
-- **Instancing**: A pipeline may declare an instance input, shared uniform plus one instance buffer per draw, readable by both vertex and fragment shader (`instanceCount`, `VK_VERTEX_INPUT_RATE_INSTANCE`, flat varyings)
+- **Instancing**: A pipeline may declare an instance input, shared uniform plus one instance buffer per draw, readable by both vertex and fragment shader (`instanceCount`, `VK_VERTEX_INPUT_RATE_INSTANCE`)
 - **Multiple render targets**: The fragment shader returns a struct of `vec4`, one per target, and the pipeline declares the target formats (several color attachments, `VkRenderingInfo`)
 - **Attachment formats**: Any glm format, sRGB encoding handled internally, float targets are stored unclamped (`VkFormat` such as `R8G8B8A8_SRGB` or `R32G32B32A32_SFLOAT`)
 - **Depth testing**: Depth buffer per batch, test, write and compare operation are pipeline state (`VkPipelineDepthStencilStateCreateInfo`)
 - **Face culling**: pipeline state (`VkPipelineRasterizationStateCreateInfo::cullMode`)
 - **Depth-only pipelines**: A pipeline with no fragment shader and no targets, as used for shadow maps (pipeline without a fragment stage)
-- **Discard**: The fragment shader may return an optional, nothing meaning discard (`discard` / `OpKill`)
+- **Discard**: The fragment shader may return an optional, nothing meaning discard (`discard` in a shader)
 - **Blending**: Optional programmable blend shader applied to target 0 (`VkPipelineColorBlendAttachmentState`, which is fixed function there)
 - **Clears**: Standalone clear of any texture, or clear-on-load state attached to a batch (`vkCmdClearColorImage`, `loadOp = CLEAR`)
-- **Multipass**: Batches execute in order and may write any texture, so later passes sample earlier results (render passes or dynamic rendering sequences)
+- **Multipass**: Batches execute in order and may write any texture, so later passes sample earlier results
 - **Render area**: A batch can override the extent, rendering to an offscreen target of a different size (`VkRenderingInfo::renderArea`)
-- **Resolution scaling**: The framebuffer can be rendered at 1/N resolution and replicated to the output (rendering at a lower resolution plus upscaling)
 - **Compute**: Compute pipelines dispatched with workgroups and local and global IDs (`vkCmdDispatch`)
 - **Textures and samplers**: Morton swizzling, nearest, bilinear and trilinear filtering, clamp and repeat addressing, mipmaps (`VkImage`, `VkSampler`, `VkImageView`)
-- **Fixed function rasterization**: Perspective-correct interpolation, top-left fill rule, near plane clipping and frustum culling (the fixed function rasterizer between the vertex and fragment stages)
-- **Screen conventions**: Row 0 is the top and NDC y is flipped when mapping to the viewport, as in Vulkan. The depth range is OpenGL-style, -1 to 1 (Y-down viewport transform)
+- **Fixed function rasterization**: Perspective-correct interpolation, top-left fill rule, near plane clipping and frustum culling
 
 # Design
-The idea I have always had when making it was that I wanted to try imitating modern graphics APIs. I really like the idea of command buffers and I think allowing the user to create a fully programmable pipeline was something worth pursuing. With those two things in mind I set myself to make the best possible system that allowed all of this.
+The idea I have always had when making it was that I wanted to try imitating modern graphics APIs. I really like the idea of command buffers and I think allowing the user to create a fully programmable pipeline was something worth pursuing. With those two things in mind I set myself to make the best possible system that allowed all of this, I then just kept iterating over it and adding features.
 
 ## Type safety
 There was one thing I was sure I did was not willing to compromise in, and that was type safety and usability of the API. I wanted to try to ensure the users got a clear path towards getting a renderer working without having to do weird pointer casting or fiddle with unsafe pointers. I decided to hide type erasure behind a recording scope class. This proved to be a very useful system to batch together draw calls within a single pipeline, which allowed me to do huge optimizations that will be discussed later. Additionally, I decided to use Cpp 20 concepts to avoid generic template errors and enforce the correctness of a pipeline created by the user. I believe the system I ended up with is quite comfortable to use and allows shader code to be done with the custom types the user has created. It also ensures that command buffer recordings are given the correct types at all times, which is something I am very happy with.
