@@ -1,6 +1,8 @@
 #pragma once
 #include <cstdint>
+#include <cstring>
 #include <glm.hpp>
+#include <optional>
 #include <span>
 #include <variant>
 
@@ -51,6 +53,12 @@ struct RasterArgs
 	PipelineState state;
 };
 
+struct ClearState
+{
+	std::optional<glm::vec4> color;
+	std::optional<float> depth;
+};
+
 class CommandBuffer
 {
 public:
@@ -66,6 +74,19 @@ public:
 		uint32_t vOutStride;
 	};
 
+	struct FillTarget
+	{
+		void* texture;
+		uint32_t pixelCount;
+		void (*fillRange)(void* texture, uint32_t begin, uint32_t end, const void* valueBytes);
+		alignas(16) uint8_t valueBytes[16];
+	};
+
+	struct ClearCommand
+	{
+		FillTarget target;
+	};
+
 	struct DrawCallBatchCommand
 	{
 		struct DrawCallData
@@ -78,10 +99,13 @@ public:
 			uint32_t indexCount;
 		};
 
-		PipelineData* pipelineData;
+		PipelineID pipelineID;
 
 		void* framebuffer;
 		Texture<glm::vec1>* depthBuffer;
+
+		std::optional<FillTarget> colorClear;
+		std::optional<FillTarget> depthClear;
 
 		std::vector<DrawCallData> drawCalls;
 	};
@@ -91,7 +115,7 @@ public:
 		
 
 		void(*computeShader)(const ComputeContext& ctx, const void* uniform);
-		void* uniform;
+		const void* uniform;
 		glm::uvec3 threads;
 		glm::uvec3 localGroupSize;
 		uint32_t totalThreads;
@@ -100,6 +124,32 @@ public:
 	void clear()
 	{
 		commands.clear();
+	}
+
+	template<PixelFormat T>
+	[[nodiscard]] static FillTarget makeFillTarget(Texture<T>& texture, const glm::vec4 value)
+	{
+		static_assert(sizeof(T) <= 16);
+
+		FillTarget target{
+			.texture = &texture,
+			.pixelCount = texture.getSize().x * texture.getSize().y,
+			.fillRange = [](void* tex, const uint32_t begin, const uint32_t end, const void* valueBytes)
+			{
+				Texture<T>& t = *static_cast<Texture<T>*>(tex);
+				std::ranges::fill(t.data() + begin, t.data() + end, *static_cast<const T*>(valueBytes));
+			},
+		};
+
+		const T encoded = texture.encodeClearValue(value);
+		std::memcpy(target.valueBytes, &encoded, sizeof(T));
+		return target;
+	}
+
+	template<PixelFormat T>
+	void clearTexture(Texture<T>& texture, const glm::vec4 value)
+	{
+		commands.emplace_back(ClearCommand{ .target = makeFillTarget(texture, value) });
 	}
 
 	template<Pipeline P, PixelFormat T>
@@ -111,7 +161,8 @@ public:
 private:
 	using Command = std::variant<
 		DrawCallBatchCommand,
-		ComputeCommand
+		ComputeCommand,
+		ClearCommand
 	>;
 
 	std::vector<Command> commands;
@@ -222,7 +273,7 @@ void rasterizeTriangleImpl(const RasterArgs& a)
 						continue; 
 					break;
 				case PipelineState::DepthOp::Never:
-					break;
+					continue;
 				}
 			}
 
@@ -298,16 +349,20 @@ PipelineID CommandBuffer::registerPipeline(const PipelineState state)
 template <ComputePipeline P>
 void CommandBuffer::commitCompute(const typename P::Uniform& uniform, glm::uvec3 localGroupSize, glm::vec3 groupCount)
 {
+	const glm::uvec3 workGroups = glm::uvec3(groupCount);
+	const uint32_t totalThreads = workGroups.x * workGroups.y * workGroups.z
+		* localGroupSize.x * localGroupSize.y * localGroupSize.z;
+
 	ComputeCommand cmd{
 		.computeShader = [](const ComputeContext& ctx, const void* uni)
 		{
-			const typename P::Uniform* u = static_cast<P::Uniform*>(uni);
+			const typename P::Uniform* u = static_cast<const typename P::Uniform*>(uni);
 			P::computeShader(ctx, u);
 		},
 		.uniform = &uniform,
-		.threads = groupCount,
+		.threads = workGroups,
 		.localGroupSize = localGroupSize,
-		.totalThreads = groupCount.x * groupCount.y * groupCount.z,
+		.totalThreads = totalThreads,
 	};
 
 	commands.emplace_back(cmd);
@@ -330,7 +385,7 @@ public:
 		DrawCall data{
 			.vertexData = vertexData.data(),
 			.indexData = nullptr,
-			.uniformData = &uniformDatas.back(),
+			.uniformIndex = static_cast<uint32_t>(uniformDatas.size() - 1),
 			.vertexCount = static_cast<uint32_t>(vertexData.size() / 3 * 3),
 			.indexCount = 0,
 		};
@@ -342,7 +397,7 @@ public:
 		DrawCall data{
 			.vertexData = vertexData.data(),
 			.indexData = indexData.data(),
-			.uniformData = &uniformDatas.back(),
+			.uniformIndex = static_cast<uint32_t>(uniformDatas.size() - 1),
 			.vertexCount = static_cast<uint32_t>(vertexData.size()),
 			.indexCount = static_cast<uint32_t>(indexData.size() / 3 * 3),
 		};
@@ -350,20 +405,26 @@ public:
 	}
 
 	template<PixelFormat T>
-	void commit(CommandBuffer& commandBuffer, Texture<T>& framebuffer, Texture<glm::vec1>* depthBuffer = nullptr) const
+	void commit(CommandBuffer& commandBuffer, Texture<T>& framebuffer, Texture<glm::vec1>* depthBuffer = nullptr, const ClearState& clearState = {}) const
 	{
 		CommandBuffer::DrawCallBatchCommand cmd{
-			.pipelineData = &commandBuffer.pipelines[pipelineID],
+			.pipelineID = pipelineID,
 			.framebuffer = &framebuffer,
 			.depthBuffer = depthBuffer,
 			.drawCalls = {},
 		};
 
+		if (clearState.color)
+			cmd.colorClear = CommandBuffer::makeFillTarget(framebuffer, *clearState.color);
+
+		if (clearState.depth && depthBuffer != nullptr)
+			cmd.depthClear = CommandBuffer::makeFillTarget(*depthBuffer, glm::vec4(*clearState.depth));
+
 		cmd.drawCalls.reserve(this->drawCalls.size());
 		for (const DrawCall& dc : this->drawCalls)
 		{
 			cmd.drawCalls.emplace_back(
-				static_cast<const void*>(dc.uniformData),
+				static_cast<const void*>(&uniformDatas[dc.uniformIndex]),
 				static_cast<const void*>(dc.vertexData),
 				dc.indexData,
 				dc.vertexCount,
@@ -391,7 +452,7 @@ private:
 	{
 		const VInput* vertexData;
 		const uint32_t* indexData;
-		const Uniform* uniformData;
+		uint32_t uniformIndex;
 
 		uint32_t vertexCount;
 		uint32_t indexCount;

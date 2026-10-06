@@ -149,7 +149,21 @@ public:
 			filter = BILINEAR;
     }
 
-	void setFormat(const Format newFormat) { format = newFormat; }
+    void setFormat(const Format newFormat) { format = newFormat; }
+
+    [[nodiscard]] Pixel encodeClearValue(const glm::vec4 value) const
+    {
+        if constexpr (std::is_floating_point_v<typename Pixel::value_type>)
+        {
+            return Pixel(value);
+        }
+        else
+        {
+            const glm::vec4 encoded = (format == SRGB) ? ShaderUtils::linearToSrgb(value) : value;
+            constexpr float elemSize = static_cast<float>(std::numeric_limits<typename Pixel::value_type>::max());
+            return Pixel(glm::round(glm::clamp(encoded, 0.0f, 1.0f) * elemSize));
+        }
+    }
 
     [[nodiscard]] glm::vec4 sample(glm::vec2 uv, bool normalized = true) const
     {

@@ -46,6 +46,7 @@ add_executable(SoftwareRasterizer
     src/main.cpp 
     src/renderer.cpp
     src/camera.cpp
+    src/scenes.cpp
     src/texture.cpp
     
     src/command_buffer.hpp
@@ -53,11 +54,12 @@ add_executable(SoftwareRasterizer
     src/present.hpp
     src/renderer.hpp
     src/camera.hpp
+    src/scenes.hpp
     src/texture.hpp
     src/shader_utils.hpp
 )
 
-target_include_directories(SoftwareRasterizer PRIVATE ${GLM_INCLUDE_DIR})
+target_include_directories(SoftwareRasterizer PRIVATE ${GLM_INCLUDE_DIR} ${STB_IMAGE_INCLUDE_DIR})
 
 if(ENABLE_SDL_OUTPUT)
     if(NOT SDL3_INCLUDE_DIR OR NOT SDL3_LIB_DIR)

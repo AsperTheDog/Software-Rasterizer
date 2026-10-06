@@ -33,15 +33,19 @@ public:
 	[[nodiscard]] float getFragmentTime() const { return fragmentTime; }
 	[[nodiscard]] float getFrameTime() const { return frameTime; }
 
+	[[nodiscard]] uint32_t getBinningOverflowCount() const { return binningOverflowCounter.load(std::memory_order_relaxed); }
+	[[nodiscard]] uint32_t getClipOverflowCount() const { return clipOverflowCounter.load(std::memory_order_relaxed); }
+
+	[[nodiscard]] float getClearTime() const { return clearTime; }
+
 private:
-	enum class Phase: uint8_t { Idle, Vertex, Binning, Fragment, Shutdown, Compute };
+	enum class Phase: uint8_t { Idle, Vertex, Binning, Fragment, Shutdown, Compute, Clear };
 
 	struct BinNode {
 		uint32_t triangleID;
 		uint32_t next;
 		uint32_t v[3];
 		float tpw;
-		const void* uniforms;
 	};
 
 	struct DrawInfo {
@@ -52,9 +56,13 @@ private:
 		const void* uniform;
 	};
 
+	struct VertexStart {
+		uint32_t drawIndex;
+		uint32_t vertexBase;
+	};
+
 	struct Tile {
 		std::atomic<uint32_t> head{UINT32_MAX};
-		std::atomic<uint32_t> count{0};
 
 		Tile() = default;
 
@@ -62,7 +70,6 @@ private:
 
 		Tile& operator=(Tile&&) noexcept {
 			head.store(UINT32_MAX, std::memory_order_relaxed);
-			count.store(0, std::memory_order_relaxed);
 			return *this;
 		}
 
@@ -76,10 +83,16 @@ private:
 	void threadRunFragment();
 
 	void threadRunCompute();
+	void threadRunClear(uint32_t threadID);
+
+	void dispatchClear();
+
+	void initVertexStarts();
 
 	void initTiles();
 
 	static constexpr uint32_t CULL_BIT = 0x80000000u;
+	static constexpr uint32_t INVALID_SLOT = UINT32_MAX;
 	[[nodiscard]] const VOutBase* resolveVertex(uint32_t slot, uint32_t vOutStride) const;
 
 	glm::uvec2 framesize;
@@ -94,10 +107,15 @@ private:
 
 	std::vector<DrawInfo> drawInfos;
 	uint32_t totalTriangles = 0;
+	uint32_t totalVertices = 0;
+	std::vector<VertexStart> vertexStarts;
+	std::vector<const void*> triangleUniforms;
 
 	std::atomic<uint32_t> triangleCounter{ 0 };
 	std::atomic<uint32_t> binningCounter{ 0 };
 	std::atomic<uint32_t> binningCullCounter{ 0 };
+	std::atomic<uint32_t> binningOverflowCounter{ 0 };
+	std::atomic<uint32_t> clipOverflowCounter{ 0 };
 	std::atomic<uint32_t> tileCounter{ 0 };
 	std::atomic<uint32_t> computeCounter{ 0 };
 
@@ -107,9 +125,12 @@ private:
 	std::barrier<> phaseBarrier;
 
 	const CommandBuffer::DrawCallBatchCommand* currentDrawCall = nullptr;
+	const CommandBuffer::PipelineData* currentPipeline = nullptr;
 	const CommandBuffer::ComputeCommand* currentComputeCall = nullptr;
+	CommandBuffer::FillTarget currentClearTargets[2];
+	uint32_t currentClearTargetCount = 0;
 
-	double vertexTime = 0.0f, binningTime = 0.0f, fragmentTime = 0.0f, frameTime = 0.0f, computeTime = 0.0f;
+	double vertexTime = 0.0f, binningTime = 0.0f, fragmentTime = 0.0f, frameTime = 0.0f, computeTime = 0.0f, clearTime = 0.0f;
 	std::chrono::time_point<std::chrono::steady_clock> prevFrame;
 };
 

@@ -4,11 +4,12 @@
 
 Renderer::Renderer()
 	: framesize(800, 600),
-	binningScratchpad(1 << 21),
 	cpuCount(std::max<uint32_t>(1, std::thread::hardware_concurrency())),
 	phaseBarrier(cpuCount + 1)
 {
 	currentPhase.store(Phase::Idle);
+	prevFrame = std::chrono::steady_clock::now();
+	vertexStarts.resize(cpuCount);
 
 	for (uint32_t i = 0; i < cpuCount; ++i) {
 		threads.emplace_back([this, i](const std::stop_token& stopToken) {
@@ -28,6 +29,10 @@ namespace
 	template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
 	template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
 
+	constexpr uint32_t binNodesPerTile = 16;
+	constexpr uint32_t binNodesPerTriangle = 4;
+	constexpr uint32_t maxBinNodes = 1u << 21;
+
 	void clipLerpRaw(uint8_t* dst, const uint8_t* a, const uint8_t* b, const float t, const uint32_t vOutStride)
 	{
 		const float* fa = reinterpret_cast<const float*>(a);
@@ -41,18 +46,31 @@ namespace
 
 void Renderer::execute(const CommandBuffer& commandBuffer)
 {
-	const auto start = std::chrono::high_resolution_clock::now();
 	vertexTime = 0.0f;
 	binningTime = 0.0f;
 	fragmentTime = 0.0f;
 	computeTime = 0.0f;
+	clearTime = 0.0f;
+	binningOverflowCounter.store(0, std::memory_order_relaxed);
+	clipOverflowCounter.store(0, std::memory_order_relaxed);
 
 	for (const CommandBuffer::Command& command : commandBuffer.commands)
 	{
+		const auto commandStart = std::chrono::steady_clock::now();
+
 		std::visit(overloaded {
 		[&](const CommandBuffer::DrawCallBatchCommand& arg) 
 			{
 				currentDrawCall = &arg;
+				currentPipeline = &commandBuffer.pipelines[arg.pipelineID];
+
+				currentClearTargetCount = 0;
+				if (arg.colorClear)
+					currentClearTargets[currentClearTargetCount++] = *arg.colorClear;
+				if (arg.depthClear)
+					currentClearTargets[currentClearTargetCount++] = *arg.depthClear;
+				if (currentClearTargetCount > 0)
+					dispatchClear();
 
 				uint32_t vertices = 0;
 				uint32_t triangles = 0;
@@ -75,7 +93,13 @@ void Renderer::execute(const CommandBuffer& commandBuffer)
 					triangles += triCount;
 				}
 				totalTriangles = triangles;
-				geometryScratchpad.resize(static_cast<size_t>(vertices) * arg.pipelineData->vOutStride);
+				totalVertices = vertices;
+				triangleUniforms.resize(triangles);
+				const uint32_t binNodeDemand = binNodesPerTile * static_cast<uint32_t>(tiles.size()) + binNodesPerTriangle * triangles;
+				if (binNodeDemand > binningScratchpad.size())
+					binningScratchpad.resize(std::min(binNodeDemand, maxBinNodes));
+				initVertexStarts();
+				geometryScratchpad.resize(static_cast<size_t>(vertices) * currentPipeline->vOutStride);
 				clipcodes.resize(vertices);
 				cullGeomScratchpad.resize(std::max(100000u, static_cast<uint32_t>(geometryScratchpad.size() / 9 * 3)));
 
@@ -85,34 +109,38 @@ void Renderer::execute(const CommandBuffer& commandBuffer)
 				tileCounter.store(0, std::memory_order_relaxed);
 
 				for (Tile& tile : tiles)
-				{
 					tile.head.store(UINT32_MAX, std::memory_order_relaxed);
-					tile.count.store(0, std::memory_order_relaxed);
-				}
 
 				currentPhase.store(Phase::Vertex, std::memory_order_release);
 				phaseBarrier.arrive_and_wait();
 				phaseBarrier.arrive_and_wait();
 
-				const auto vertexEnd = std::chrono::high_resolution_clock::now();
+				const auto vertexEnd = std::chrono::steady_clock::now();
 
 				currentPhase.store(Phase::Binning, std::memory_order_release);
 				phaseBarrier.arrive_and_wait();
 				phaseBarrier.arrive_and_wait();
 
-				const auto binningEnd = std::chrono::high_resolution_clock::now();
+				const auto binningEnd = std::chrono::steady_clock::now();
 
 				currentPhase.store(Phase::Fragment, std::memory_order_release);
 				phaseBarrier.arrive_and_wait();
 				phaseBarrier.arrive_and_wait();
 
-				const std::chrono::time_point<std::chrono::steady_clock> fragmentEnd = std::chrono::high_resolution_clock::now();
+				const auto fragmentEnd = std::chrono::steady_clock::now();
 
-				vertexTime += std::chrono::duration<float, std::milli>(vertexEnd - start).count();
+				vertexTime += std::chrono::duration<float, std::milli>(vertexEnd - commandStart).count();
 				binningTime += std::chrono::duration<float, std::milli>(binningEnd - vertexEnd).count();
 				fragmentTime += std::chrono::duration<float, std::milli>(fragmentEnd - binningEnd).count();
 
 				currentPhase.store(Phase::Idle, std::memory_order_release);
+			},
+			[&](const CommandBuffer::ClearCommand& arg)
+			{
+				currentClearTargets[0] = arg.target;
+				currentClearTargetCount = 1;
+
+				dispatchClear();
 			},
 			[&](const CommandBuffer::ComputeCommand& arg)
 			{
@@ -124,9 +152,9 @@ void Renderer::execute(const CommandBuffer& commandBuffer)
 				phaseBarrier.arrive_and_wait();
 				phaseBarrier.arrive_and_wait();
 
-				const auto computeEnd = std::chrono::high_resolution_clock::now();
+				const auto computeEnd = std::chrono::steady_clock::now();
 
-				computeTime += std::chrono::duration<float, std::milli>(computeEnd - start).count();
+				computeTime += std::chrono::duration<float, std::milli>(computeEnd - commandStart).count();
 			}
 		}, command);
 	}
@@ -134,7 +162,7 @@ void Renderer::execute(const CommandBuffer& commandBuffer)
 
 void Renderer::endFrame()
 {
-	const auto now = std::chrono::high_resolution_clock::now();
+	const auto now = std::chrono::steady_clock::now();
 	frameTime = std::chrono::duration<float, std::milli>(now - prevFrame).count();
 	prevFrame = now;
 }
@@ -163,6 +191,9 @@ void Renderer::threadRun(const std::stop_token& stopToken, const uint32_t thread
 		case Phase::Compute:
 			threadRunCompute();
 			break;
+		case Phase::Clear:
+			threadRunClear(threadID);
+			break;
 		case Phase::Idle:
 		case Phase::Shutdown:
 			break;
@@ -172,13 +203,29 @@ void Renderer::threadRun(const std::stop_token& stopToken, const uint32_t thread
 	}
 }
 
-void Renderer::threadRunVertex(const uint32_t threadID) {
-	uint32_t totalVertices = 0;
-	for (const CommandBuffer::DrawCallBatchCommand::DrawCallData& drawCall : currentDrawCall->drawCalls)
-	{
-		totalVertices += drawCall.vertexCount;
-	}
+void Renderer::initVertexStarts()
+{
+	const std::vector<CommandBuffer::DrawCallBatchCommand::DrawCallData>& drawCalls = currentDrawCall->drawCalls;
+	const uint32_t vertsPerThread = (totalVertices + cpuCount - 1) / cpuCount;
 
+	uint32_t dcIdx = 0;
+	uint32_t dcStartVertices = 0;
+
+	for (uint32_t threadID = 0; threadID < cpuCount; ++threadID)
+	{
+		const uint32_t vertIdx = threadID * vertsPerThread;
+
+		while (dcIdx < drawCalls.size() && vertIdx >= dcStartVertices + drawCalls[dcIdx].vertexCount)
+		{
+			dcStartVertices += drawCalls[dcIdx].vertexCount;
+			dcIdx++;
+		}
+
+		vertexStarts[threadID] = { dcIdx, dcStartVertices };
+	}
+}
+
+void Renderer::threadRunVertex(const uint32_t threadID) {
 	const uint32_t vertsPerThread = (totalVertices + cpuCount - 1) / cpuCount;
 	const uint32_t vertIdx = threadID * vertsPerThread;
 	const uint32_t vertNum = std::min(vertsPerThread, totalVertices - vertIdx);
@@ -186,26 +233,21 @@ void Renderer::threadRunVertex(const uint32_t threadID) {
 	if (vertNum == 0)
 		return;
 
-	uint32_t dcIdx = 0;
-	uint32_t dcStartVertices = 0;
-	while (dcIdx < currentDrawCall->drawCalls.size() && vertIdx >= dcStartVertices + currentDrawCall->drawCalls[dcIdx].vertexCount)
-	{
-		dcStartVertices += currentDrawCall->drawCalls[dcIdx].vertexCount;
-		dcIdx++;
-	}
+	uint32_t dcIdx = vertexStarts[threadID].drawIndex;
+	uint32_t dcStartVertices = vertexStarts[threadID].vertexBase;
 
 	uint32_t currentIdx = vertIdx;
 	uint32_t remainingVertices = vertNum;
 
-	const std::vector<CommandBuffer::DrawCallBatchCommand::DrawCallData> drawCalls = currentDrawCall->drawCalls;
-	const size_t vertexStride = currentDrawCall->pipelineData->vertexStride;
-	const size_t vOutStride = currentDrawCall->pipelineData->vOutStride;
+	const std::vector<CommandBuffer::DrawCallBatchCommand::DrawCallData>& drawCalls = currentDrawCall->drawCalls;
+	const size_t vertexStride = currentPipeline->vertexStride;
+	const size_t vOutStride = currentPipeline->vOutStride;
 
-	const auto vertexRange = currentDrawCall->pipelineData->vertexRange;
+	const auto vertexRange = currentPipeline->vertexRange;
 
 	while (remainingVertices > 0 && dcIdx < drawCalls.size())
 	{
-		const auto& drawCall = drawCalls[dcIdx];
+		const CommandBuffer::DrawCallBatchCommand::DrawCallData& drawCall = drawCalls[dcIdx];
 
 		const uint32_t localIdx = currentIdx - dcStartVertices;
 		const uint32_t verticesToProcess = std::min(remainingVertices, drawCall.vertexCount - localIdx);
@@ -267,16 +309,23 @@ const VOutBase* Renderer::resolveVertex(const uint32_t slot, const uint32_t vOut
 
 void Renderer::threadRunBinning()
 {
-	const uint32_t vOutStride = currentDrawCall->pipelineData->vOutStride;
-	const PipelineState::CullMode cullMode = currentDrawCall->pipelineData->state.cullMode;
-	const glm::ivec2 maxTileIndex = glm::ivec2(framesize / 16u) - glm::ivec2(1);
+	const uint32_t vOutStride = currentPipeline->vOutStride;
+	const PipelineState::CullMode cullMode = currentPipeline->state.cullMode;
+	const glm::ivec2 maxTileIndex = glm::ivec2((framesize.x + 15u) / 16u, (framesize.y + 15u) / 16u) - glm::ivec2(1);
+
+	if (tiles.empty())
+		return;
 	const uint32_t cullCapacity = static_cast<uint32_t>(cullGeomScratchpad.size() / vOutStride);
+	const uint32_t binNodeCapacity = static_cast<uint32_t>(binningScratchpad.size());
 
 	const auto makeClipVertex = [&](const VOutBase* a, const VOutBase* b, const float t) -> uint32_t
 	{
-		uint32_t idx = binningCullCounter.fetch_add(1, std::memory_order_relaxed);
-		if (idx >= cullCapacity)
-			idx = cullCapacity - 1;
+		const uint32_t idx = binningCullCounter.fetch_add(1, std::memory_order_relaxed);
+		if (idx >= cullCapacity) [[unlikely]]
+		{
+			clipOverflowCounter.fetch_add(1, std::memory_order_relaxed);
+			return INVALID_SLOT;
+		}
 
 		uint8_t* dst = cullGeomScratchpad.data() + static_cast<size_t>(idx) * vOutStride;
 		clipLerpRaw(dst, reinterpret_cast<const uint8_t*>(a), reinterpret_cast<const uint8_t*>(b), t, vOutStride);
@@ -304,8 +353,8 @@ void Renderer::threadRunBinning()
 
 		float tpw = 0.0f;
 
-		if (currentDrawCall->pipelineData->getUV != nullptr) {
-			const auto getUV = currentDrawCall->pipelineData->getUV;
+		if (currentPipeline->getUV != nullptr) {
+			const auto getUV = currentPipeline->getUV;
 
 			const glm::vec2 uv0 = getUV(a);
 			const glm::vec2 uv1 = getUV(b);
@@ -328,108 +377,128 @@ void Renderer::threadRunBinning()
 		const glm::vec2 bboxMin = glm::min(glm::min(pa, pb), pc);
 		const glm::vec2 bboxMax = glm::max(glm::max(pa, pb), pc);
 
-		const glm::ivec2 tileMin = glm::clamp(glm::ivec2(glm::floor(bboxMin / 16.0f)), glm::ivec2(0), maxTileIndex);
-		const glm::ivec2 tileMax = glm::clamp(glm::ivec2(glm::floor(bboxMax / 16.0f)), glm::ivec2(0), maxTileIndex);
+		const glm::vec2 tileMinF = glm::clamp(glm::floor(bboxMin / 16.0f), glm::vec2(0.0f), glm::vec2(maxTileIndex));
+		const glm::vec2 tileMaxF = glm::clamp(glm::floor(bboxMax / 16.0f), glm::vec2(0.0f), glm::vec2(maxTileIndex));
+		const glm::ivec2 tileMin = glm::ivec2(tileMinF);
+		const glm::ivec2 tileMax = glm::ivec2(tileMaxF);
+
+		triangleUniforms[triID] = uniform;
 
 		for (int32_t y = tileMin.y; y <= tileMax.y; ++y)
 		{
 			for (int32_t x = tileMin.x; x <= tileMax.x; ++x)
 			{
 				const uint32_t nodeIdx = binningCounter.fetch_add(1, std::memory_order_relaxed);
+				if (nodeIdx >= binNodeCapacity) [[unlikely]]
+				{
+					binningOverflowCounter.fetch_add(1, std::memory_order_relaxed);
+					return;
+				}
+
 				BinNode& node = binningScratchpad[nodeIdx];
 				node.triangleID = triID;
 				node.v[0] = sa;
 				node.v[1] = sb;
 				node.v[2] = sc;
-				node.uniforms = uniform;
 				node.tpw = tpw;
 
 				const uint32_t tileIdx = static_cast<uint32_t>(y) * tileRowSize + static_cast<uint32_t>(x);
 				Tile& tile = tiles[tileIdx];
-				const uint32_t oldHead = tile.head.exchange(nodeIdx, std::memory_order_acq_rel);
+				const uint32_t oldHead = tile.head.exchange(nodeIdx, std::memory_order_relaxed);
 				node.next = oldHead;
-				tile.count.fetch_add(1, std::memory_order_acq_rel);
 			}
 		}
 	};
 
+	constexpr uint32_t triangleChunk = 32;
+
 	while (true)
 	{
-		const uint32_t nextTri = triangleCounter.fetch_add(1);
+		const uint32_t chunkStart = triangleCounter.fetch_add(triangleChunk, std::memory_order_relaxed);
 
-		if (nextTri >= totalTriangles)
+		if (chunkStart >= totalTriangles)
 			break;
 
-		uint32_t lo = 0;
-		uint32_t hi = static_cast<uint32_t>(drawInfos.size());
-		while (lo + 1 < hi)
+		const uint32_t chunkEnd = std::min(chunkStart + triangleChunk, totalTriangles);
+
+		for (uint32_t nextTri = chunkStart; nextTri < chunkEnd; ++nextTri)
 		{
-			const uint32_t mid = (lo + hi) / 2;
-			if (drawInfos[mid].triBase <= nextTri)
-				lo = mid;
-			else
-				hi = mid;
-		}
-		const DrawInfo& info = drawInfos[lo];
-		const uint32_t localTri = nextTri - info.triBase;
-
-		uint32_t slot[3];
-		if (info.indexData != nullptr)
-		{
-			slot[0] = info.vertexBase + info.indexData[localTri * 3 + 0];
-			slot[1] = info.vertexBase + info.indexData[localTri * 3 + 1];
-			slot[2] = info.vertexBase + info.indexData[localTri * 3 + 2];
-		}
-		else
-		{
-			slot[0] = info.vertexBase + localTri * 3 + 0;
-			slot[1] = info.vertexBase + localTri * 3 + 1;
-			slot[2] = info.vertexBase + localTri * 3 + 2;
-		}
-
-		const uint8_t c0 = clipcodes[slot[0]];
-		const uint8_t c1 = clipcodes[slot[1]];
-		const uint8_t c2 = clipcodes[slot[2]];
-
-		if ((c0 & c1 & c2) != 0)
-			continue;
-
-		if (((c0 | c1 | c2) & CLIP_NEAR_PLANE) == 0)
-		{
-			emitTriangle(nextTri, info.uniform, slot[0], slot[1], slot[2]);
-			continue;
-		}
-
-		const VOutBase* tv[3] = {
-			resolveVertex(slot[0], vOutStride),
-			resolveVertex(slot[1], vOutStride),
-			resolveVertex(slot[2], vOutStride),
-		};
-		const float dist[3] = {
-			tv[0]->clipPosition.z + tv[0]->clipPosition.w,
-			tv[1]->clipPosition.z + tv[1]->clipPosition.w,
-			tv[2]->clipPosition.z + tv[2]->clipPosition.w,
-		};
-
-		uint32_t poly[4];
-		uint32_t polyCount = 0;
-		for (uint32_t i = 0; i < 3; ++i)
-		{
-			const uint32_t j = (i + 1) % 3;
-			const bool insideI = dist[i] >= 0.0f;
-			const bool insideJ = dist[j] >= 0.0f;
-
-			if (insideI)
-				poly[polyCount++] = slot[i];
-			if (insideI != insideJ)
+			uint32_t lo = 0;
+			uint32_t hi = static_cast<uint32_t>(drawInfos.size());
+			while (lo + 1 < hi)
 			{
-				const float t = dist[i] / (dist[i] - dist[j]);
-				poly[polyCount++] = makeClipVertex(tv[i], tv[j], t);
+				const uint32_t mid = (lo + hi) / 2;
+				if (drawInfos[mid].triBase <= nextTri)
+					lo = mid;
+				else
+					hi = mid;
 			}
-		}
+			const DrawInfo& info = drawInfos[lo];
+			const uint32_t localTri = nextTri - info.triBase;
 
-		for (uint32_t k = 1; k + 1 < polyCount; ++k)
-			emitTriangle(nextTri, info.uniform, poly[0], poly[k], poly[k + 1]);
+			uint32_t slot[3];
+			if (info.indexData != nullptr)
+			{
+				slot[0] = info.vertexBase + info.indexData[localTri * 3 + 0];
+				slot[1] = info.vertexBase + info.indexData[localTri * 3 + 1];
+				slot[2] = info.vertexBase + info.indexData[localTri * 3 + 2];
+			}
+			else
+			{
+				slot[0] = info.vertexBase + localTri * 3 + 0;
+				slot[1] = info.vertexBase + localTri * 3 + 1;
+				slot[2] = info.vertexBase + localTri * 3 + 2;
+			}
+
+			const uint8_t c0 = clipcodes[slot[0]];
+			const uint8_t c1 = clipcodes[slot[1]];
+			const uint8_t c2 = clipcodes[slot[2]];
+
+			if ((c0 & c1 & c2) != 0)
+				continue;
+
+			if (((c0 | c1 | c2) & CLIP_NEAR_PLANE) == 0)
+			{
+				emitTriangle(nextTri, info.uniform, slot[0], slot[1], slot[2]);
+				continue;
+			}
+
+			const VOutBase* tv[3] = {
+				resolveVertex(slot[0], vOutStride),
+				resolveVertex(slot[1], vOutStride),
+				resolveVertex(slot[2], vOutStride),
+			};
+			const float dist[3] = {
+				tv[0]->clipPosition.z + tv[0]->clipPosition.w,
+				tv[1]->clipPosition.z + tv[1]->clipPosition.w,
+				tv[2]->clipPosition.z + tv[2]->clipPosition.w,
+			};
+
+			uint32_t poly[4];
+			uint32_t polyCount = 0;
+			for (uint32_t i = 0; i < 3; ++i)
+			{
+				const uint32_t j = (i + 1) % 3;
+				const bool insideI = dist[i] >= 0.0f;
+				const bool insideJ = dist[j] >= 0.0f;
+
+				if (insideI)
+					poly[polyCount++] = slot[i];
+				if (insideI != insideJ)
+				{
+					const float t = dist[i] / (dist[i] - dist[j]);
+					const uint32_t clipped = makeClipVertex(tv[i], tv[j], t);
+					if (clipped == INVALID_SLOT) [[unlikely]]
+					{
+						polyCount = 0;
+						break;
+					}
+					poly[polyCount++] = clipped;
+				}
+			}
+			for (uint32_t k = 1; k + 1 < polyCount; ++k)
+				emitTriangle(nextTri, info.uniform, poly[0], poly[k], poly[k + 1]);
+		}
 	}
 }
 
@@ -438,7 +507,7 @@ void Renderer::threadRunFragment()
 	std::vector<BinNode> localBinNodes;
 
 	const CommandBuffer::DrawCallBatchCommand& batch = *currentDrawCall;
-	const uint32_t vOutStride = batch.pipelineData->vOutStride;
+	const uint32_t vOutStride = currentPipeline->vOutStride;
 
 	while (true)
 	{
@@ -449,10 +518,7 @@ void Renderer::threadRunFragment()
 
 		Tile& tile = tiles[tileIdx];
 		glm::ivec2 tileCoords = glm::ivec2((tileIdx) % tileRowSize, (tileIdx) / tileRowSize) * 16;
-		const uint32_t triangleCount = tile.count.load(std::memory_order_acquire);
-
 		localBinNodes.clear();
-		localBinNodes.reserve(triangleCount);
 
 		uint32_t nodeIdx = tile.head.load(std::memory_order_acquire);
 		while (nodeIdx != UINT32_MAX)
@@ -463,8 +529,8 @@ void Renderer::threadRunFragment()
 
 		std::ranges::sort(localBinNodes, [](const BinNode& a, const BinNode& b) { return a.triangleID < b.triangleID; });
 
-		PipelineState& state = batch.pipelineData->state;
-		auto rasterize = batch.pipelineData->rasterizeTriangle;
+		const PipelineState& state = currentPipeline->state;
+		auto rasterize = currentPipeline->rasterizeTriangle;
 
 		for (const BinNode& node : localBinNodes)
 		{
@@ -476,11 +542,13 @@ void Renderer::threadRunFragment()
 			const glm::vec2 p2 = glm::vec2(v2->position);
 			const glm::vec2 p3 = glm::vec2(v3->position);
 
-			const glm::ivec2 bboxMin = glm::min(glm::min(p1, p2), p3);
-			const glm::ivec2 bboxMax = glm::max(glm::max(p1, p2), p3);
+			const glm::vec2 bboxMin = glm::min(glm::min(p1, p2), p3);
+			const glm::vec2 bboxMax = glm::max(glm::max(p1, p2), p3);
 
-			const glm::ivec2 start = glm::clamp(bboxMin, tileCoords, tileCoords + glm::ivec2(15));
-			const glm::ivec2 end = glm::clamp(bboxMax, tileCoords, tileCoords + glm::ivec2(15));
+			const glm::vec2 tileMin = glm::vec2(tileCoords);
+			const glm::vec2 tileMax = glm::vec2(glm::min(tileCoords + glm::ivec2(15), glm::ivec2(framesize) - glm::ivec2(1)));
+			const glm::ivec2 start = glm::ivec2(glm::clamp(bboxMin, tileMin, tileMax));
+			const glm::ivec2 end = glm::ivec2(glm::clamp(bboxMax, tileMin, tileMax));
 
 			const float triangleArea = (p2.x - p1.x) * (p3.y - p1.y) - (p2.y - p1.y) * (p3.x - p1.x);
 			if (std::abs(triangleArea) < 0.0001f)
@@ -490,7 +558,7 @@ void Renderer::threadRunFragment()
 				.v1 = v1,
 				.v2 = v2,
 				.v3 = v3,
-				.uniform = node.uniforms,
+				.uniform = triangleUniforms[node.triangleID],
 				.framebuffer = batch.framebuffer,
 				.depthBuffer = batch.depthBuffer,
 				.start = start,
@@ -535,10 +603,38 @@ void Renderer::threadRunCompute() {
 	}
 }
 
+void Renderer::dispatchClear()
+{
+	const auto clearStart = std::chrono::steady_clock::now();
+
+	currentPhase.store(Phase::Clear, std::memory_order_release);
+	phaseBarrier.arrive_and_wait();
+	phaseBarrier.arrive_and_wait();
+
+	const auto clearEnd = std::chrono::steady_clock::now();
+	clearTime += std::chrono::duration<float, std::milli>(clearEnd - clearStart).count();
+
+	currentPhase.store(Phase::Idle, std::memory_order_release);
+}
+
+void Renderer::threadRunClear(const uint32_t threadID)
+{
+	for (uint32_t i = 0; i < currentClearTargetCount; ++i)
+	{
+		const CommandBuffer::FillTarget& target = currentClearTargets[i];
+
+		const uint32_t perThread = (target.pixelCount + cpuCount - 1) / cpuCount;
+		const uint32_t begin = threadID * perThread;
+		const uint32_t end = std::min(begin + perThread, target.pixelCount);
+
+		if (begin < end)
+			target.fillRange(target.texture, begin, end, target.valueBytes);
+	}
+}
+
 void Renderer::initTiles()
 {
 	tiles.clear();
-	const uint32_t tileCount = (framesize.x / 16) * (framesize.y / 16);
-	tiles.resize(tileCount);
-	tileRowSize = framesize.x / 16;
+	tileRowSize = (framesize.x + 15) / 16;
+	tiles.resize(static_cast<size_t>(tileRowSize) * ((framesize.y + 15) / 16));
 }

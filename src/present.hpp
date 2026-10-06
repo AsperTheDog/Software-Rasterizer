@@ -16,10 +16,14 @@ concept Output = requires(T t, Texture<glm::u8vec4>* tex, float vertexTime, floa
 
 struct PerformanceData
 {
+	const char* sceneName = "";
 	float vertexTime;
 	float binningTime;
 	float fragmentTime;
+	float clearTime;
 	float frameTime;
+	uint32_t binningOverflow;
+	uint32_t clipOverflow;
 };
 
 class TerminalCanvas 
@@ -68,6 +72,10 @@ public:
 
         outputStrBuffer.append("Timings:\n");
 		
+		outputStrBuffer.append("Scene: ");
+        outputStrBuffer.append(perfData.sceneName);
+        outputStrBuffer.append("\n");
+
 		outputStrBuffer.append("Vertex: ");
         outputStrBuffer.append(std::to_string(perfData.vertexTime));
         outputStrBuffer.append(" ms\n");    
@@ -79,6 +87,16 @@ public:
         outputStrBuffer.append("Fragment: ");
 		outputStrBuffer.append(std::to_string(perfData.fragmentTime));
 		outputStrBuffer.append(" ms\n");
+
+		outputStrBuffer.append("Clear: ");
+		outputStrBuffer.append(std::to_string(perfData.clearTime));
+		outputStrBuffer.append(" ms\n");
+
+		outputStrBuffer.append("Overflow (bin/clip): ");
+		outputStrBuffer.append(std::to_string(perfData.binningOverflow));
+		outputStrBuffer.append("/");
+		outputStrBuffer.append(std::to_string(perfData.clipOverflow));
+		outputStrBuffer.append("\n");
 
         outputStrBuffer.append("Present: ");
         outputStrBuffer.append(std::to_string(presentTime));
@@ -224,10 +242,12 @@ public:
         if (tex.isSwizzled())
 			throw std::runtime_error("Cannot present a swizzled texture. Please disable swizzling when creating the texture.");
 
-        const std::string perfStats = "Software Rasterizer | VS: " + std::to_string(perfData.vertexTime) +
+        const std::string perfStats = "Software Rasterizer | " + std::string(perfData.sceneName) + " | VS: " + std::to_string(perfData.vertexTime) +
             "ms | Bin: " + std::to_string(perfData.binningTime) +
             "ms | FS: " + std::to_string(perfData.fragmentTime) +
+            "ms | Clr: " + std::to_string(perfData.clearTime) +
             "ms | Frame: " + std::to_string(perfData.frameTime) + "ms" +
+            " | Overflow: " + std::to_string(perfData.binningOverflow) + "/" + std::to_string(perfData.clipOverflow) +
             " | Camera: " + std::to_string(cam.getPosition().x) + ", " + std::to_string(cam.getPosition().y) + ", " + std::to_string(cam.getPosition().z);
         SDL_SetWindowTitle(window, perfStats.c_str());
 

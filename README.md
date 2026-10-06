@@ -2,7 +2,7 @@
 CPU rasterizer made to be highly optimized and mimicking Vulkan's Pipeline Object + Command Buffer design.
 
 # Capabilities
-This rasterizer is made with full rendering flexibility in mind. It supports fully programmable pipelines with custom vertex input, uniform, and vertex output structure data. It additionally supports depth buffer testing (programmable within the pipeline) and an optional custom blending shader stage for transparency. Draw calls can receive either only a vertex buffer, or a vertex + index buffer combo. Rendering is done to a previously allocated texture, which means multipass rendering is not only possible but as easy to do as in a real graphics API.
+This rasterizer is made with full rendering flexibility in mind. It supports fully programmable pipelines with custom vertex input, uniform, and vertex output structure data. It additionally supports depth buffer testing (programmable within the pipeline) and an optional custom blending shader stage for transparency. Draw calls can receive either only a vertex buffer, or a vertex + index buffer combo. Rendering is done to a previously allocated texture, which means multipass rendering is not only possible but as easy to do as in a real graphics API. Clearing is also done through the Command Buffer. You can do it either with a standalone clear targeting any texture, or clear-on-load state attached to a draw call batch, in both cases interpreted in the format of whichever texture is being written to.
 
 # Design
 The idea I have always had when making it was that I wanted to try imitating modern graphics APIs. I really like the idea of command buffers and I think allowing the user to create a fully programmable pipeline was something worth pursuing. With those two things in mind I set myself to make the best possible system that allowed all of this.
@@ -34,6 +34,9 @@ I have added MipTexture as well, which is supported via an extra optional "shade
 
 ## Presentation
 Two simple presentation engines have been made: One uses the terminal (it's painfully slow but it's as plug and play as it gets), the other is an SDL3 window (as fast as it gets, but needs SDL3 to work). The SDL3 window additionally allows you to control the camera, which lets you move and look round.
+
+# Scenes
+The render loop in [main.cpp](https://github.com/AsperTheDog/Software-Rasterizer/blob/main/src/main.cpp) is a small host for scenes. A scene is any type satisfying the Scene concept in [scenes.hpp](https://github.com/AsperTheDog/Software-Rasterizer/blob/main/src/scenes.hpp). It is constructed from a CommandBuffer, reports a name and a camera setup, and records its own draw calls into the buffer each frame. I made some scenes as examples with different properties, feel free to switch them around and play with them as you like.
 
 # Building
 This is a very simple Cpp 20 project. The main two dependencies are the header only libraris [GLM](https://github.com/g-truc/glm) and [STB](https://github.com/nothings/stb) (specifically STB_Image). Just tell CMake where it is when building. Optionally, you can also point to the location of SDL3 if you wish to use the SDL3 output. The project expects a path to the include files folder and a path to the .lib folder.
