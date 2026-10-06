@@ -1,9 +1,22 @@
 #pragma once
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cstring>
 #include <glm.hpp>
 #include <string_view>
+
+#ifndef SIMD_INTRINSICS
+#if defined(__SSE2__) || defined(_M_X64)
+#define SIMD_INTRINSICS 1
+#else
+#define SIMD_INTRINSICS 0
+#endif
+#endif
+
+#if SIMD_INTRINSICS
+#include <emmintrin.h>
+#endif
 
 #include <stb_image.h>
 #include <stdexcept>
@@ -17,14 +30,26 @@ concept PixelFormat = requires(T a) {
 	{ glm::vec4(a) } -> std::same_as<glm::vec4>;
 };
 
-[[nodiscard]] constexpr uint32_t expandBits(uint32_t v) noexcept
+[[nodiscard]] constexpr uint32_t expandByte(uint32_t v) noexcept
 {
-    v &= 0x0000ffff;                  // v = ---- ---- ---- ---- fedc ba98 7654 3210
-    v = (v ^ (v << 8)) & 0x00ff00ff;  // v = ---- ---- fedc ba98 ---- ---- 7654 3210
-    v = (v ^ (v << 4)) & 0x0f0f0f0f;  // v = ---- fedc ---- ba98 ---- 7654 ---- 3210
-    v = (v ^ (v << 2)) & 0x33333333;  // v = --fe --dc --ba --98 --76 --54 --32 --10
-    v = (v ^ (v << 1)) & 0x55555555;  // v = -f-e -d-c -b-a -9-8 -7-6 -5-4 -3-2 -1-0
+    v &= 0x000000ff;
+    v = (v ^ (v << 4)) & 0x0f0f;
+    v = (v ^ (v << 2)) & 0x3333;
+    v = (v ^ (v << 1)) & 0x5555;
     return v;
+}
+
+inline constexpr std::array<uint16_t, 256> expandByteTable = []
+{
+    std::array<uint16_t, 256> table{};
+    for (uint32_t i = 0; i < 256; ++i)
+        table[i] = static_cast<uint16_t>(expandByte(i));
+    return table;
+}();
+
+[[nodiscard]] constexpr uint32_t expandBits(const uint32_t v) noexcept
+{
+    return expandByteTable[v & 0xff] | static_cast<uint32_t>(expandByteTable[(v >> 8) & 0xff]) << 16;
 }
 
 enum Filter : uint8_t { NEAREST, BILINEAR, TRILINEAR };
@@ -188,43 +213,27 @@ public:
             return decodeSample(pixels[getPixelIndex({ x, y })], normalized);
         }
 
-        const float u = uv.x * size.x - 0.5f;
-        const float v = uv.y * size.y - 0.5f;
-
-        const int x0 = static_cast<int>(std::floor(u));
-        const int y0 = static_cast<int>(std::floor(v));
-
-        const int x1 = x0 + 1;
-        const int y1 = y0 + 1;
-
-        const float wx = u - std::floor(u);
-        const float wy = v - std::floor(v);
-
-        uint32_t px0, px1, py0, py1;
-
-        if (border == CLAMP)
+#if SIMD_INTRINSICS
+        if constexpr (std::is_same_v<Pixel, glm::u8vec4>)
         {
-            px0 = glm::clamp(x0, 0, static_cast<int>(size.x - 1));
-            px1 = glm::clamp(x1, 0, static_cast<int>(size.x - 1));
-            py0 = glm::clamp(y0, 0, static_cast<int>(size.y - 1));
-            py1 = glm::clamp(y1, 0, static_cast<int>(size.y - 1));
+            glm::vec4 result;
+            _mm_storeu_ps(&result.x, sampleLinear(uv, normalized));
+            return result;
         }
-        else
-        {
-            px0 = (x0 % static_cast<int>(size.x) + size.x) % size.x;
-            px1 = (x1 % static_cast<int>(size.x) + size.x) % size.x;
-            py0 = (y0 % static_cast<int>(size.y) + size.y) % size.y;
-            py1 = (y1 % static_cast<int>(size.y) + size.y) % size.y;
-        }
+#endif
 
-        const glm::vec4 c00 = decodeSample(glm::vec4(pixels[getPixelIndex({ px0, py0 })]), normalized);
-        const glm::vec4 c10 = decodeSample(glm::vec4(pixels[getPixelIndex({ px1, py0 })]), normalized);
-        const glm::vec4 c01 = decodeSample(glm::vec4(pixels[getPixelIndex({ px0, py1 })]), normalized);
-        const glm::vec4 c11 = decodeSample(glm::vec4(pixels[getPixelIndex({ px1, py1 })]), normalized);
+        const Footprint f = bilinearFootprint(uv);
 
-        const glm::vec4 top = glm::mix(c00, c10, wx);
-        const glm::vec4 bottom = glm::mix(c01, c11, wx);
-        return glm::mix(top, bottom, wy);
+        const std::array<size_t, 4> i = footprintIndices(f);
+
+        const glm::vec4 c00 = decodeSample(glm::vec4(pixels[i[0]]), normalized);
+        const glm::vec4 c10 = decodeSample(glm::vec4(pixels[i[1]]), normalized);
+        const glm::vec4 c01 = decodeSample(glm::vec4(pixels[i[2]]), normalized);
+        const glm::vec4 c11 = decodeSample(glm::vec4(pixels[i[3]]), normalized);
+
+        const glm::vec4 top = glm::mix(c00, c10, f.wx);
+        const glm::vec4 bottom = glm::mix(c01, c11, f.wx);
+        return glm::mix(top, bottom, f.wy);
     }
 
     glm::vec4 getPixel(const glm::uvec2 coords, const bool quantize = true)
@@ -297,6 +306,96 @@ public:
     }
 
 private:
+    struct Footprint
+    {
+        uint32_t x0, x1, y0, y1;
+        float wx, wy;
+    };
+
+    [[nodiscard]] Footprint bilinearFootprint(const glm::vec2 uv) const
+    {
+        const float u = uv.x * size.x - 0.5f;
+        const float v = uv.y * size.y - 0.5f;
+
+        const int x0 = static_cast<int>(std::floor(u));
+        const int y0 = static_cast<int>(std::floor(v));
+
+        const int x1 = x0 + 1;
+        const int y1 = y0 + 1;
+
+        const float wx = u - std::floor(u);
+        const float wy = v - std::floor(v);
+
+        uint32_t px0, px1, py0, py1;
+
+        if (border == CLAMP)
+        {
+            px0 = glm::clamp(x0, 0, static_cast<int>(size.x - 1));
+            px1 = glm::clamp(x1, 0, static_cast<int>(size.x - 1));
+            py0 = glm::clamp(y0, 0, static_cast<int>(size.y - 1));
+            py1 = glm::clamp(y1, 0, static_cast<int>(size.y - 1));
+        }
+        else
+        {
+            px0 = (x0 % static_cast<int>(size.x) + size.x) % size.x;
+            py0 = (y0 % static_cast<int>(size.y) + size.y) % size.y;
+            px1 = px0 + 1 == size.x ? 0 : px0 + 1;
+            py1 = py0 + 1 == size.y ? 0 : py0 + 1;
+        }
+
+        return { px0, px1, py0, py1, wx, wy };
+    }
+
+    [[nodiscard]] std::array<size_t, 4> footprintIndices(const Footprint& f) const
+    {
+        if (swizzled)
+        {
+            const uint32_t ex0 = expandBits(f.x0);
+            const uint32_t ex1 = expandBits(f.x1);
+            const uint32_t ey0 = expandBits(f.y0) << 1;
+            const uint32_t ey1 = expandBits(f.y1) << 1;
+            return { ey0 | ex0, ey0 | ex1, ey1 | ex0, ey1 | ex1 };
+        }
+        return { f.y0 * size.x + f.x0, f.y0 * size.x + f.x1, f.y1 * size.x + f.x0, f.y1 * size.x + f.x1 };
+    }
+
+#if SIMD_INTRINSICS
+    [[nodiscard]] __m128 sampleLinear(const glm::vec2 uv, const bool normalized) const
+    {
+        const Footprint f = bilinearFootprint(uv);
+
+        const std::array<size_t, 4> i = footprintIndices(f);
+
+        const __m128 c00 = loadTexel(i[0], normalized);
+        const __m128 c10 = loadTexel(i[1], normalized);
+        const __m128 c01 = loadTexel(i[2], normalized);
+        const __m128 c11 = loadTexel(i[3], normalized);
+
+        return lerp(lerp(c00, c10, f.wx), lerp(c01, c11, f.wx), f.wy);
+    }
+
+    [[nodiscard]] __m128 loadTexel(const size_t index, const bool normalized) const
+    {
+        if (normalized && format == SRGB)
+        {
+            const glm::vec4 linear = ShaderUtils::srgb8ToLinear(glm::vec4(pixels[index]));
+            return _mm_loadu_ps(&linear.x);
+        }
+
+        uint32_t packed;
+        std::memcpy(&packed, &pixels[index], sizeof(packed));
+        const __m128i zero = _mm_setzero_si128();
+        const __m128i words = _mm_unpacklo_epi8(_mm_cvtsi32_si128(static_cast<int>(packed)), zero);
+        const __m128 channels = _mm_cvtepi32_ps(_mm_unpacklo_epi16(words, zero));
+        return normalized ? _mm_div_ps(channels, _mm_set1_ps(255.0f)) : channels;
+    }
+
+    [[nodiscard]] static __m128 lerp(const __m128 x, const __m128 y, const float a)
+    {
+        return _mm_add_ps(_mm_mul_ps(x, _mm_set1_ps(1.0f - a)), _mm_mul_ps(y, _mm_set1_ps(a)));
+    }
+
+#endif
     static glm::vec4 normalizePixel(const glm::vec4 color, const bool normalized)
     {
         if constexpr (!std::is_floating_point_v<typename Pixel::value_type>)
@@ -412,6 +511,16 @@ public:
         {
 			const uint32_t lowerMip = static_cast<uint32_t>(std::floor(mipLevel));
 			const uint32_t upperMip = std::min(lowerMip + 1, static_cast<uint32_t>(mipmaps.size() - 1));
+#if SIMD_INTRINSICS
+			if constexpr (std::is_same_v<Pixel, glm::u8vec4>)
+			{
+				const __m128 lowerSample = mipmaps[lowerMip].sampleLinear(uv, normalized);
+				const __m128 upperSample = mipmaps[upperMip].sampleLinear(uv, normalized);
+				glm::vec4 result;
+				_mm_storeu_ps(&result.x, Texture<Pixel>::lerp(lowerSample, upperSample, frac));
+				return result;
+			}
+#endif
 			const glm::vec4 lowerSample = mipmaps[lowerMip].sample(uv, normalized);
 			const glm::vec4 upperSample = mipmaps[upperMip].sample(uv, normalized);
 			return glm::mix(lowerSample, upperSample, frac);

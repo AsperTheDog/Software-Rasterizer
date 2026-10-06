@@ -111,17 +111,17 @@ namespace ShaderUtils {
             srgbBytes.w / 255.0f);
     }
 
-    [[nodiscard]] inline glm::vec4 linearToSrgb8(const glm::vec4& linearColor) noexcept
+    [[nodiscard]] inline glm::u8vec4 linearToSrgb8(const glm::vec4& linearColor) noexcept
     {
-        glm::vec4 bytes;
+        glm::u8vec4 bytes;
         for (glm::length_t channel = 0; channel < 3; ++channel)
         {
             const float linear = std::min(std::max(0.0f, linearColor[channel]), 1.0f);
             uint32_t byte = detail::srgbTables.encodeBuckets[static_cast<uint32_t>(linear * static_cast<float>(detail::encodeBucketCount))];
             byte += detail::srgbTables.encodeThresholds[byte] <= linear ? 1 : 0;
-            bytes[channel] = static_cast<float>(byte);
+            bytes[channel] = static_cast<uint8_t>(byte);
         }
-        bytes.w = glm::round(glm::clamp(linearColor.w, 0.0f, 1.0f) * 255.0f);
+        bytes.w = static_cast<uint8_t>(glm::round(glm::clamp(linearColor.w, 0.0f, 1.0f) * 255.0f));
         return bytes;
     }
 }
