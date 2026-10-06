@@ -1,6 +1,7 @@
 #pragma once
 #include <glm.hpp>
 #include <concepts>
+#include <optional>
 #include <type_traits>
 
 #include "shader_utils.hpp"
@@ -36,6 +37,9 @@ struct ComputeContext
     glm::uvec3 workGroupID;
 };
 
+template<typename R>
+concept FragmentResult = std::same_as<R, glm::vec4> || std::same_as<R, std::optional<glm::vec4>>;
+
 template<typename P>
 concept Pipeline = std::is_empty_v<P> && requires 
 {
@@ -49,7 +53,7 @@ concept Pipeline = std::is_empty_v<P> && requires
 {
     { P::vertexShader(v_in, uni) } -> std::same_as<typename P::VOutput>;
 	// tpw only needed for mipmapped texture sampling, can be ignored otherwise
-    { P::fragmentShader(in_v, uni, tpw) } -> std::same_as<glm::vec4>;
+    { P::fragmentShader(in_v, uni, tpw) } -> FragmentResult;
 };
 
 template<typename P>
@@ -60,6 +64,11 @@ concept HasBlendShader = Pipeline<P> && requires (const glm::vec4& col, const ty
 template<typename P>
 concept HasAccurateMip = Pipeline<P> && requires (const typename P::VOutput * in_v) {
 	{ P::getUV(in_v) } -> std::same_as<glm::vec2>;
+};
+
+template<typename P>
+concept HasDiscardingFragmentShader = Pipeline<P> && requires (const typename P::VOutput* in_v, const typename P::Uniform* uni, const float tpw) {
+	{ P::fragmentShader(in_v, uni, tpw) } -> std::same_as<std::optional<glm::vec4>>;
 };
 
 template<typename P>

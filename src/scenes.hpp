@@ -7,6 +7,7 @@
 
 #include "camera.hpp"
 #include "command_buffer.hpp"
+#include "gltf.hpp"
 #include "pipeline.hpp"
 #include "renderer.hpp"
 #include "texture.hpp"
@@ -24,6 +25,68 @@ concept Scene = std::is_constructible_v<S, CommandBuffer&> && requires(S& scene,
 	{ S::name() } -> std::convertible_to<const char*>;
 	{ S::cameraSetup() } -> std::same_as<CameraSetup>;
 	scene.record(commandBuffer, framebuffer, depthBuffer, camera, time);
+};
+
+class PbrPipeline
+{
+public:
+	struct UniformStruct
+	{
+		Texture<glm::u8vec4>* baseColorTexture;
+		Texture<glm::u8vec4>* metallicRoughnessTexture;
+		Texture<glm::u8vec4>* emissiveTexture;
+		Texture<glm::u8vec4>* occlusionTexture;
+		glm::mat4 modelViewProjectionMatrix;
+		glm::mat4 modelMatrix;
+		glm::mat4 normalMatrix;
+		glm::vec3 cameraPosition;
+		glm::vec3 lightDirection;
+		glm::vec4 baseColorFactor;
+		glm::vec3 emissiveFactor;
+		float metallicFactor;
+		float roughnessFactor;
+		float occlusionStrength;
+		bool alphaMask;
+		float alphaCutoff;
+	};
+
+	typedef GltfVertex VIn;
+
+	struct VOut : VOutBase
+	{
+		glm::vec3 worldPosition;
+		glm::vec3 worldNormal;
+		glm::vec2 uvCoords;
+	};
+
+	typedef UniformStruct Uniform;
+	typedef VIn VInput;
+	typedef VOut VOutput;
+
+	static VOutput vertexShader(const VInput* vIn, const Uniform* uni);
+	static std::optional<glm::vec4> fragmentShader(const VOutput* vOut, const Uniform* uni, const float tpw);
+};
+
+class GltfScene
+{
+public:
+	explicit GltfScene(CommandBuffer& commandBuffer);
+
+	static const char* name();
+	static CameraSetup cameraSetup();
+
+	void record(CommandBuffer& commandBuffer, Texture<glm::u8vec4>& framebuffer, Texture<glm::vec1>& depthBuffer, Camera& camera, const float time);
+
+private:
+	static constexpr const char* kModelPath = "../assets/DamagedHelmet.glb";
+	static constexpr float kRotateSpeed = 0.f;
+
+	GltfModel model;
+	PbrPipeline::Uniform uniform{};
+	CommandBufferRecording<PbrPipeline> recording;
+	CommandBufferRecording<PbrPipeline> doubleSidedRecording;
+	std::vector<uint32_t> singleSidedPrimitives;
+	std::vector<uint32_t> doubleSidedPrimitives;
 };
 
 class ColorPipeline

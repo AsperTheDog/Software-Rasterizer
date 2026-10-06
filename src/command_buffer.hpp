@@ -299,7 +299,18 @@ void rasterizeTriangleImpl(const RasterArgs& a)
 				for (uint32_t i = skip; i < count; ++i)
 					fd[i] = fa[i] * pc0 + fb[i] * pc1 + fc[i] * pc2;
 			}
-			glm::vec4 fragmentOutput = P::fragmentShader(&interpolated, uni, a.tpw);
+			glm::vec4 fragmentOutput{};
+			if constexpr (HasDiscardingFragmentShader<P>)
+			{
+				const std::optional<glm::vec4> shaded = P::fragmentShader(&interpolated, uni, a.tpw);
+				if (!shaded)
+					continue;
+				fragmentOutput = *shaded;
+			}
+			else
+			{
+				fragmentOutput = P::fragmentShader(&interpolated, uni, a.tpw);
+			}
 
 			const uint32_t bx0 = static_cast<uint32_t>(x) * ds;
 			const uint32_t by0 = static_cast<uint32_t>(y) * ds;

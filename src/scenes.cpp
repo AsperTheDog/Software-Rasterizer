@@ -851,3 +851,193 @@ void ComputeScene::record(CommandBuffer& commandBuffer, Texture<glm::u8vec4>& fr
 
 	recording.commit(commandBuffer, framebuffer, &depthBuffer, clearState);
 }
+
+namespace
+{
+	constexpr float kPi = 3.14159265358979f;
+	constexpr glm::vec3 kPbrLightColor{ 3.0f, 2.95f, 2.85f };
+	constexpr glm::vec3 kPbrSkyColor{ 0.35f, 0.42f, 0.55f };
+	constexpr glm::vec3 kPbrGroundColor{ 0.12f, 0.10f, 0.09f };
+
+	constexpr float kScreenUpAxisSign = -1.0f;
+
+	glm::mat4 screenUpCorrection()
+	{
+		return glm::scale(glm::mat4{ 1.0f }, glm::vec3(1.0f, kScreenUpAxisSign, 1.0f));
+	}
+}
+
+PbrPipeline::VOutput PbrPipeline::vertexShader(const VInput* vIn, const Uniform* uni)
+{
+	VOutput vOut{};
+	vOut.position = uni->modelViewProjectionMatrix * glm::vec4(vIn->position, 1.0f);
+	vOut.worldPosition = glm::vec3(uni->modelMatrix * glm::vec4(vIn->position, 1.0f));
+	vOut.worldNormal = glm::mat3(uni->normalMatrix) * vIn->normal;
+	vOut.uvCoords = vIn->uvcoords;
+
+	return vOut;
+}
+
+std::optional<glm::vec4> PbrPipeline::fragmentShader(const VOutput* vOut, const Uniform* uni, const float tpw)
+{
+	const glm::vec3 normal = glm::normalize(vOut->worldNormal);
+	const glm::vec3 view = glm::normalize(uni->cameraPosition - vOut->worldPosition);
+	const glm::vec3 light = glm::normalize(-uni->lightDirection);
+
+	glm::vec4 baseColor = uni->baseColorFactor;
+
+	if (uni->baseColorTexture)
+		baseColor *= uni->baseColorTexture->sample(vOut->uvCoords);
+
+	if (uni->alphaMask && baseColor.a < uni->alphaCutoff)
+		return std::nullopt;
+
+	float metallic = uni->metallicFactor;
+	float roughness = uni->roughnessFactor;
+
+	if (uni->metallicRoughnessTexture)
+	{
+		const glm::vec4 packed = uni->metallicRoughnessTexture->sample(vOut->uvCoords);
+		roughness *= packed.g;
+		metallic *= packed.b;
+	}
+
+	metallic = glm::clamp(metallic, 0.0f, 1.0f);
+	roughness = glm::clamp(roughness, 0.045f, 1.0f);
+
+	const glm::vec3 albedo = glm::vec3(baseColor);
+	const glm::vec3 fresnelBase = glm::mix(glm::vec3(0.04f), albedo, metallic);
+	const float alpha = roughness * roughness;
+	const float alphaSquared = alpha * alpha;
+	const glm::vec3 halfway = glm::normalize(view + light);
+
+	const float noL = glm::max(glm::dot(normal, light), 0.0f);
+	const float noV = glm::max(glm::dot(normal, view), 0.0f);
+	const float noH = glm::max(glm::dot(normal, halfway), 0.0f);
+	const float voH = glm::max(glm::dot(view, halfway), 0.0f);
+
+	const float distributionDenominator = noH * noH * (alphaSquared - 1.0f) + 1.0f;
+	const float distribution = alphaSquared / glm::max(kPi * distributionDenominator * distributionDenominator, 1.0e-6f);
+	const float geometryK = alpha * 0.5f;
+	const float geometry = (noV / glm::max(noV * (1.0f - geometryK) + geometryK, 1.0e-6f))
+		* (noL / glm::max(noL * (1.0f - geometryK) + geometryK, 1.0e-6f));
+	const glm::vec3 fresnel = fresnelBase + (glm::vec3(1.0f) - fresnelBase) * glm::pow(1.0f - voH, 5.0f);
+
+	const glm::vec3 specular = (distribution * geometry) * fresnel / glm::max(4.0f * noV * noL, 1.0e-6f);
+	const glm::vec3 diffuse = (glm::vec3(1.0f) - fresnel) * (1.0f - metallic) * albedo / kPi;
+
+	glm::vec3 color = (diffuse + specular) * kPbrLightColor * noL;
+
+	float occlusion = 1.0f;
+
+	if (uni->occlusionTexture)
+		occlusion = glm::mix(1.0f, uni->occlusionTexture->sample(vOut->uvCoords).r, uni->occlusionStrength);
+
+	const glm::vec3 ambient = glm::mix(kPbrGroundColor, kPbrSkyColor, normal.y * 0.5f + 0.5f) * occlusion;
+
+	color += ambient * (albedo * (1.0f - metallic) + fresnelBase * (1.0f - roughness * 0.7f));
+
+	if (uni->emissiveTexture)
+		color += uni->emissiveFactor * glm::vec3(uni->emissiveTexture->sample(vOut->uvCoords));
+	else
+		color += uni->emissiveFactor;
+
+	color = color / (color + glm::vec3(1.0f));
+
+	return glm::vec4{ glm::clamp(color, 0.0f, 1.0f), baseColor.a };
+}
+
+GltfScene::GltfScene(CommandBuffer& commandBuffer)
+	: model(loadGltf(kModelPath)),
+	  recording(commandBuffer.registerPipeline<PbrPipeline, glm::u8vec4>(colorState(PipelineState::CullMode::Back, true))),
+	  doubleSidedRecording(commandBuffer.registerPipeline<PbrPipeline, glm::u8vec4>(colorState(PipelineState::CullMode::None, true)))
+{
+	for (uint32_t i = 0; i < static_cast<uint32_t>(model.primitives.size()); ++i)
+	{
+		const int32_t material = model.primitives[i].material;
+		const bool doubleSided = material >= 0 && static_cast<size_t>(material) < model.materials.size()
+			&& model.materials[material].doubleSided;
+
+		if (doubleSided)
+			doubleSidedPrimitives.push_back(i);
+		else
+			singleSidedPrimitives.push_back(i);
+	}
+
+	recording.reserve(singleSidedPrimitives.size(), singleSidedPrimitives.size());
+	doubleSidedRecording.reserve(doubleSidedPrimitives.size(), doubleSidedPrimitives.size());
+
+	uniform.lightDirection = kLightDirection;
+}
+
+const char* GltfScene::name()
+{
+	return "gltf";
+}
+
+CameraSetup GltfScene::cameraSetup()
+{
+	const glm::vec3 position{ 1.8f, 1.15f, 2.7f };
+
+	return { .position = position, .direction = glm::normalize(-position), .fov = 45.0f };
+}
+
+void GltfScene::record(CommandBuffer& commandBuffer, Texture<glm::u8vec4>& framebuffer, Texture<glm::vec1>& depthBuffer, Camera& camera, const float time)
+{
+	constexpr ClearState clearState{
+		.color = glm::vec4(0.02f, 0.02f, 0.025f, 1.0f),
+		.depth = std::numeric_limits<float>::infinity()
+	};
+
+	const auto resolveTexture = [this](const int32_t textureIndex) -> Texture<glm::u8vec4>*
+	{
+		if (textureIndex < 0 || static_cast<size_t>(textureIndex) >= model.textures.size())
+			return nullptr;
+
+		return model.textures[static_cast<size_t>(textureIndex)].get();
+	};
+
+	const glm::mat4 modelMatrix = screenUpCorrection() * glm::rotate(glm::mat4{ 1.0f }, glm::radians(time * kRotateSpeed), glm::vec3(0.0f, 1.0f, 0.0f));
+
+	uniform.modelViewProjectionMatrix = camera.getVPMatrix() * modelMatrix;
+	uniform.modelMatrix = modelMatrix;
+	uniform.normalMatrix = glm::transpose(glm::inverse(modelMatrix));
+	uniform.cameraPosition = camera.getPosition();
+
+	recording.clear();
+	doubleSidedRecording.clear();
+
+	const auto drawPrimitive = [&](const uint32_t index, CommandBufferRecording<PbrPipeline>& target)
+	{
+		const GltfPrimitive& primitive = model.primitives[index];
+		const GltfMaterial material = primitive.material >= 0
+			? model.materials[static_cast<size_t>(primitive.material)]
+			: GltfMaterial{};
+
+		uniform.baseColorFactor = material.baseColorFactor;
+		uniform.emissiveFactor = material.emissiveFactor;
+		uniform.metallicFactor = material.metallicFactor;
+		uniform.roughnessFactor = material.roughnessFactor;
+		uniform.occlusionStrength = material.occlusionStrength;
+		uniform.alphaMask = material.alphaMask;
+		uniform.alphaCutoff = material.alphaCutoff;
+		uniform.baseColorTexture = resolveTexture(material.baseColorTexture);
+		uniform.metallicRoughnessTexture = resolveTexture(material.metallicRoughnessTexture);
+		uniform.emissiveTexture = resolveTexture(material.emissiveTexture);
+		uniform.occlusionTexture = resolveTexture(material.occlusionTexture);
+
+		target.bindUniform(uniform);
+		target.drawIndexed(primitive.vertices, primitive.indices);
+	};
+
+	for (const uint32_t index : singleSidedPrimitives)
+		drawPrimitive(index, recording);
+
+	for (const uint32_t index : doubleSidedPrimitives)
+		drawPrimitive(index, doubleSidedRecording);
+
+	recording.commit(commandBuffer, framebuffer, &depthBuffer, clearState);
+
+	if (!doubleSidedPrimitives.empty())
+		doubleSidedRecording.commit(commandBuffer, framebuffer, &depthBuffer, ClearState{});
+}

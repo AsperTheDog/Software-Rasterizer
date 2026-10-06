@@ -8,6 +8,8 @@
 
 #include <limits>
 
+constexpr uint32_t kDownsample = 1;
+
 template<Scene S>
 static int runApp()
 {
@@ -18,7 +20,7 @@ static int runApp()
 #endif
 	Renderer renderer{};
 
-	renderer.setFramesize(canvas.getSize(), 1);
+	renderer.setFramesize(canvas.getSize(), kDownsample);
 
 	Texture<glm::vec1> depthTexture{ renderer.getFramesize(), glm::vec1(std::numeric_limits<float>::infinity()) };
 	Texture<glm::u8vec4> colorTexture{ canvas.getSize(), glm::u8vec4(0, 0, 0, 255), false };
@@ -82,5 +84,5 @@ static int runApp()
 
 int main()
 {
-	return runApp<CubesScene>();
+	return runApp<GltfScene>();
 }

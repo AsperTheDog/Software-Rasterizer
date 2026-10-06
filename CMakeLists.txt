@@ -37,6 +37,22 @@ if(NOT STB_IMAGE_INCLUDE_DIR)
     )
 endif()
 
+set(TINYGLTF_INCLUDE_DIR "" CACHE PATH "Path to the directory containing 'tiny_gltf_v3.h', 'tiny_gltf_v3.c' and 'tinygltf_json_c.h'")
+
+if(NOT TINYGLTF_INCLUDE_DIR)
+    find_path(TINYGLTF_AUTO_DIR NAMES tiny_gltf_v3.h)
+    if(TINYGLTF_AUTO_DIR)
+        set(TINYGLTF_INCLUDE_DIR ${TINYGLTF_AUTO_DIR})
+    endif()
+endif()
+
+if(NOT TINYGLTF_INCLUDE_DIR)
+    message(FATAL_ERROR 
+        "\n[Engine Error]: tiny_gltf_v3.h not found! \n"
+        "Please pass -DTINYGLTF_INCLUDE_DIR=\"C:/path/to/folder_containing_tiny_gltf_v3\""
+    )
+endif()
+
 option(ENABLE_SDL_OUTPUT "Enable optional SDL3 graphical window output" OFF)
 
 set(SDL3_INCLUDE_DIR "" CACHE PATH "Path to the SDL3 'include' directory")
@@ -47,6 +63,8 @@ add_executable(SoftwareRasterizer
     src/renderer.cpp
     src/camera.cpp
     src/scenes.cpp
+    src/gltf.cpp
+    src/tinygltf_impl.cpp
     src/texture.cpp
     
     src/command_buffer.hpp
@@ -55,11 +73,12 @@ add_executable(SoftwareRasterizer
     src/renderer.hpp
     src/camera.hpp
     src/scenes.hpp
+    src/gltf.hpp
     src/texture.hpp
     src/shader_utils.hpp
 )
 
-target_include_directories(SoftwareRasterizer PRIVATE ${GLM_INCLUDE_DIR} ${STB_IMAGE_INCLUDE_DIR})
+target_include_directories(SoftwareRasterizer PRIVATE ${GLM_INCLUDE_DIR} ${STB_IMAGE_INCLUDE_DIR} ${TINYGLTF_INCLUDE_DIR})
 
 if(ENABLE_SDL_OUTPUT)
     if(NOT SDL3_INCLUDE_DIR OR NOT SDL3_LIB_DIR)
