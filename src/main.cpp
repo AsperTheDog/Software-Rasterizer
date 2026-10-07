@@ -83,5 +83,5 @@ static int runApp()
 
 int main()
 {
-	return runApp<PostFxScene<BloomScene<DeferredScene>>>();
+	return runApp<DeferredScene>();
 }

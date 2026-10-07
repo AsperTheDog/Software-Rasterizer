@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <numbers>
 
 const std::array<FullscreenVertex, 3> kFullscreenTriangle = { {
 	{ { -1.0f, -1.0f } },
@@ -15,7 +16,7 @@ const std::array<FullscreenVertex, 3> kFullscreenTriangle = { {
 namespace
 {
 	constexpr float kInfinity = std::numeric_limits<float>::infinity();
-	constexpr float kPi = 3.14159265358979f;
+	constexpr float kPi = std::numbers::pi_v<float>;
 
 	PipelineState makeState(const PipelineState::CullMode cullMode, const bool depthTest, const bool depthWrite, const bool hasColor)
 	{
@@ -68,7 +69,7 @@ namespace
 
 	void makeGroundMesh(std::vector<ColorPipeline::VInput>& vertices, std::vector<uint32_t>& indices, const float halfExtent)
 	{
-		const glm::vec3 up(0.0f, 1.0f, 0.0f);
+		constexpr glm::vec3 up(0.0f, 1.0f, 0.0f);
 
 		vertices = {
 			{ .position = { -halfExtent, 0.0f, -halfExtent }, .normal = up, .uvcoords = { 0.0f, 0.0f } },
@@ -81,7 +82,7 @@ namespace
 
 	void makeScreenMesh(std::vector<ColorPipeline::VInput>& vertices, std::vector<uint32_t>& indices, const float halfExtent)
 	{
-		const glm::vec3 forward(0.0f, 0.0f, 1.0f);
+		constexpr glm::vec3 forward(0.0f, 0.0f, 1.0f);
 
 		vertices = {
 			{ .position = { -halfExtent, -halfExtent, 0.0f }, .normal = forward, .uvcoords = { 0.0f, 1.0f } },
@@ -450,7 +451,7 @@ void ShadowScene::record(CommandBuffer& commandBuffer, Texture<glm::u8vec4>& fra
 		litCubeInstances[index] = litInstance(model, color, 0.0f);
 	};
 
-	const glm::vec3 cubePositions[4] = { { -6.0f, -1.0f, 2.0f }, { 6.0f, -1.0f, 3.0f }, { -4.0f, -1.0f, -5.0f }, { 5.0f, -1.0f, -4.0f } };
+	constexpr glm::vec3 cubePositions[4] = { { -6.0f, -1.0f, 2.0f }, { 6.0f, -1.0f, 3.0f }, { -4.0f, -1.0f, -5.0f }, { 5.0f, -1.0f, -4.0f } };
 	for (uint32_t i = 0; i < 4; ++i)
 	{
 		const glm::mat4 model = glm::rotate(glm::translate(glm::mat4(1.0f), cubePositions[i]), glm::radians(time * 4.0f + static_cast<float>(i) * 40.0f), glm::vec3(0.0f, 1.0f, 0.0f));
