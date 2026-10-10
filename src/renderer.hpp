@@ -64,25 +64,9 @@ private:
 		uint32_t vertexBase;
 	};
 
-	struct Tile {
-		std::atomic<uint32_t> head{UINT32_MAX};
-
-		Tile() = default;
-
-		Tile(Tile&&) noexcept {}
-
-		Tile& operator=(Tile&&) noexcept {
-			head.store(UINT32_MAX, std::memory_order_relaxed);
-			return *this;
-		}
-
-		Tile(const Tile&) = delete;
-		Tile& operator=(const Tile&) = delete;
-	};
-
 	void threadRun(const std::stop_token& stopToken, uint32_t threadID);
 	void threadRunVertex(uint32_t threadID);
-	void threadRunBinning();
+	void threadRunBinning(uint32_t threadID);
 	void threadRunFragment();
 
 	void threadRunCompute();
@@ -107,7 +91,8 @@ private:
 	std::vector<uint8_t> cullGeomScratchpad;
 	std::vector<uint8_t> clipcodes;
 	std::vector<BinNode> binningScratchpad;
-	std::vector<Tile> tiles;
+	std::vector<uint32_t> tileHeads;
+	uint32_t tileCount = 0;
 	uint32_t tileRowSize = 0;
 
 	std::vector<DrawInfo> drawInfos;

@@ -83,5 +83,5 @@ static int runApp()
 
 int main()
 {
-	return runApp<DeferredScene>();
+	return runApp<GltfScene>();
 }

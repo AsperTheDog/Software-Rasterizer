@@ -325,9 +325,49 @@ void rasterizeTriangleImpl(const RasterArgs& a)
 	const glm::vec3 edgeOriginX(p2.x, p3.x, p1.x);
 	const glm::vec3 edgeOriginY(p2.y, p3.y, p1.y);
 
+	// Per-row x bracket from the edge equations, padded so the exact per-pixel test still decides coverage.
+	const bool useRowSpans = (a.end.x - a.start.x) >= 3;
+	const glm::vec3 edgeInvStepX(
+		edgeStepX.x != 0.0f ? 1.0f / edgeStepX.x : 0.0f,
+		edgeStepX.y != 0.0f ? 1.0f / edgeStepX.y : 0.0f,
+		edgeStepX.z != 0.0f ? 1.0f / edgeStepX.z : 0.0f);
+
 	for (int32_t y = a.start.y; y <= a.end.y; ++y)
 	{
-		for (int32_t x = a.start.x; x <= a.end.x; ++x)
+		int32_t xBegin = a.start.x;
+		int32_t xEnd = a.end.x;
+
+		if (useRowSpans)
+		{
+			const float py = static_cast<float>(y) + 0.5f;
+			bool emptyRow = false;
+
+			for (int i = 0; i < 3; ++i)
+			{
+				const float c = edgeStepY[i] * (py - edgeOriginY[i]);
+				const float slope = edgeStepX[i];
+				if (slope == 0.0f)
+				{
+					emptyRow |= c < 0.0f;
+					continue;
+				}
+
+				const float boundary = edgeOriginX[i] - c * edgeInvStepX[i] - 0.5f;
+				if (!(std::abs(boundary) < 1.0e5f))
+					continue;
+
+				const int32_t b = static_cast<int32_t>(boundary);
+				if (slope > 0.0f)
+					xBegin = std::max(xBegin, b - 2);
+				else
+					xEnd = std::min(xEnd, b + 3);
+			}
+
+			if (emptyRow)
+				continue;
+		}
+
+		for (int32_t x = xBegin; x <= xEnd; ++x)
 		{
 			const glm::vec2 pixelCenter = glm::vec2(static_cast<float>(x) + 0.5f, static_cast<float>(y) + 0.5f);
 			const glm::vec3 edge = edgeStepX * (pixelCenter.x - edgeOriginX) + edgeStepY * (pixelCenter.y - edgeOriginY);

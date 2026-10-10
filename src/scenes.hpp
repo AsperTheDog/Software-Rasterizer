@@ -80,7 +80,7 @@ public:
 	void record(CommandBuffer& commandBuffer, Texture<glm::u8vec4>& framebuffer, Texture<glm::vec1>& depthBuffer, Camera& camera, const float time);
 
 private:
-	static constexpr const char* kModelPath = "../assets/DamagedHelmet.glb";
+	static constexpr const char* kModelPath = "../assets/bistro.glb";
 	static constexpr float kRotateSpeed = 0.f;
 
 	GltfModel model;
