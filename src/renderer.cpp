@@ -523,6 +523,9 @@ void Renderer::threadRunBinning(const uint32_t threadID)
 void Renderer::threadRunFragment()
 {
 	std::vector<BinNode> localBinNodes;
+	std::vector<BinNode> mergeScratch;
+	std::vector<size_t> runEnds;
+	std::vector<uint32_t> threadChunks;
 
 	const CommandBuffer::DrawCallBatchCommand& batch = *currentDrawCall;
 	const uint32_t vOutStride = currentPipeline->vOutStride;
@@ -537,19 +540,42 @@ void Renderer::threadRunFragment()
 
 		glm::ivec2 tileCoords = glm::ivec2((tileIdx) % tileRowSize, (tileIdx) / tileRowSize) * 16;
 		localBinNodes.clear();
+		runEnds.clear();
 
 		for (uint32_t t = 0; t < cpuCount; ++t)
 		{
-			uint32_t chunkIdx = tileHeads[static_cast<size_t>(t) * tileCount + tileIdx];
-			while (chunkIdx != UINT32_MAX)
+			threadChunks.clear();
+			for (uint32_t chunkIdx = tileHeads[static_cast<size_t>(t) * tileCount + tileIdx]; chunkIdx != UINT32_MAX; chunkIdx = binningScratchpad[chunkIdx].next)
+				threadChunks.push_back(chunkIdx);
+
+			if (threadChunks.empty())
+				continue;
+
+			for (auto it = threadChunks.rbegin(); it != threadChunks.rend(); ++it)
 			{
-				const BinChunk& chunk = binningScratchpad[chunkIdx];
+				const BinChunk& chunk = binningScratchpad[*it];
 				localBinNodes.insert(localBinNodes.end(), chunk.nodes, chunk.nodes + chunk.count);
-				chunkIdx = chunk.next;
 			}
+			runEnds.push_back(localBinNodes.size());
 		}
 
-		std::ranges::sort(localBinNodes, [](const BinNode& a, const BinNode& b) { return a.triangleID < b.triangleID; });
+		const auto byTriangle = [](const BinNode& a, const BinNode& b) { return a.triangleID < b.triangleID; };
+		while (runEnds.size() > 1)
+		{
+			mergeScratch.resize(localBinNodes.size());
+			size_t outRuns = 0;
+			size_t begin = 0;
+			for (size_t r = 0; r < runEnds.size(); r += 2)
+			{
+				const size_t mid = runEnds[r];
+				const size_t end = r + 1 < runEnds.size() ? runEnds[r + 1] : mid;
+				std::merge(localBinNodes.begin() + begin, localBinNodes.begin() + mid, localBinNodes.begin() + mid, localBinNodes.begin() + end, mergeScratch.begin() + begin, byTriangle);
+				runEnds[outRuns++] = end;
+				begin = end;
+			}
+			runEnds.resize(outRuns);
+			localBinNodes.swap(mergeScratch);
+		}
 
 		const PipelineState& state = currentPipeline->state;
 		auto rasterize = currentPipeline->rasterizeTriangle;

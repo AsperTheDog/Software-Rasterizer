@@ -210,10 +210,8 @@ private:
 template<PixelFormat... T>
 Attachments(Texture<T>&...) -> Attachments<T...>;
 
-inline void vertexClipCalc(const VertexArgs& args, const VOutBase& out, const uint32_t idx)
+inline uint8_t vertexClipCalc(const glm::vec4& p)
 {
-	const glm::vec4 p = out.clipPosition;
-
 	uint8_t code = CLIP_INSIDE;
 	if (p.z + p.w < 0.0f || p.w <= 0.0f) code |= CLIP_NEAR_PLANE;
 	if (p.z - p.w > 0.0f)                code |= CLIP_FAR_PLANE;
@@ -222,7 +220,7 @@ inline void vertexClipCalc(const VertexArgs& args, const VOutBase& out, const ui
 	if (p.y + p.w < 0.0f)                code |= CLIP_BOTTOM_PLANE;
 	if (p.y - p.w > 0.0f)                code |= CLIP_TOP_PLANE;
 
-	args.clipcodes[idx] = code;
+	return code;
 }
 
 template<Pipeline P>
@@ -252,20 +250,26 @@ void vertexRangeImpl(const VertexArgs& args)
 
 	const VInput* vIn = static_cast<const VInput*>(args.vertexInput);
 	const Uniform* uniform = static_cast<const Uniform*>(args.uniform);
-	VOutput* vOut = static_cast<VOutput*>(args.vertexOutput);
+	VOutput* __restrict vOut = static_cast<VOutput*>(args.vertexOutput);
+	uint8_t* __restrict clipcodes = args.clipcodes;
+
+	const float width = static_cast<float>(args.framesize.x);
+	const float height = static_cast<float>(args.framesize.y);
 
 	for (uint32_t i = 0; i < args.vertexCount; ++i)
 	{
-		vOut[i] = runVertexShader<P>(&vIn[i], args.instanceInput, uniform);
-		vOut[i].clipPosition = vOut[i].position;
+		VOutput out = runVertexShader<P>(&vIn[i], args.instanceInput, uniform);
+		out.clipPosition = out.position;
 
-		vertexClipCalc(args, vOut[i], i);
+		clipcodes[i] = vertexClipCalc(out.clipPosition);
 
-		const float oneOverW = 1.0f / vOut[i].position.w;
-		vOut[i].position *= oneOverW;
-		vOut[i].position.x = (vOut[i].position.x + 1.0f) * 0.5f * static_cast<float>(args.framesize.x);
-		vOut[i].position.y = (1.0f - vOut[i].position.y) * 0.5f * static_cast<float>(args.framesize.y);
-		vOut[i].position.w = oneOverW;
+		const float oneOverW = 1.0f / out.position.w;
+		out.position *= oneOverW;
+		out.position.x = (out.position.x + 1.0f) * 0.5f * width;
+		out.position.y = (1.0f - out.position.y) * 0.5f * height;
+		out.position.w = oneOverW;
+
+		vOut[i] = out;
 	}
 }
 
@@ -326,7 +330,7 @@ void rasterizeTriangleImpl(const RasterArgs& a)
 	const glm::vec3 edgeOriginX(p2.x, p3.x, p1.x);
 	const glm::vec3 edgeOriginY(p2.y, p3.y, p1.y);
 
-	const bool useRowSpans = (a.end.x - a.start.x) >= 3;
+	const bool useRowSpans = (a.end.x - a.start.x) >= 7;
 	glm::vec3 edgeInvStepX(0.0f);
 	if (useRowSpans)
 	{
