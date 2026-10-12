@@ -53,6 +53,7 @@ if(NOT TINYGLTF_INCLUDE_DIR)
     )
 endif()
 
+option(ENABLE_ALLOC_TRACKING "Count heap allocations/frees per frame and report them on stderr" OFF)
 option(ENABLE_SDL_OUTPUT "Enable optional SDL3 graphical window output" OFF)
 
 set(SDL3_INCLUDE_DIR "" CACHE PATH "Path to the SDL3 'include' directory")
@@ -82,6 +83,10 @@ add_executable(SoftwareRasterizer
 
 target_include_directories(SoftwareRasterizer PRIVATE ${GLM_INCLUDE_DIR} ${GLM_INCLUDE_DIR}/glm ${STB_IMAGE_INCLUDE_DIR} ${TINYGLTF_INCLUDE_DIR})
 target_compile_definitions(SoftwareRasterizer PRIVATE GLM_FORCE_INLINE)
+
+if(ENABLE_ALLOC_TRACKING)
+    target_compile_definitions(SoftwareRasterizer PRIVATE ALLOC_TRACKING)
+endif()
 
 if(ENABLE_SDL_OUTPUT)
     if(NOT SDL3_INCLUDE_DIR OR NOT SDL3_LIB_DIR)

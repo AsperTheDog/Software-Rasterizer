@@ -1,5 +1,6 @@
 #include <glm.hpp>
 
+#include "alloc_tracker.hpp"
 #include "command_buffer.hpp"
 #include "present.hpp"
 #include "renderer.hpp"
@@ -13,7 +14,7 @@ template<Scene S>
 static int runApp()
 {
 #ifdef SDL_OUTPUT
-	SdlWindow canvas{ 1920, 1080 };
+	SdlWindow canvas{ 1280, 720 };
 #else
 	TerminalCanvas canvas{ 1000, 500 };
 #endif
@@ -40,6 +41,7 @@ static int runApp()
 #endif
 
 	float time = 0.0f;
+	alloc_tracker::FrameReporter allocReporter{};
 
 #ifdef SDL_OUTPUT
 	while (canvas.isOpen())
@@ -72,6 +74,7 @@ static int runApp()
 		if (time > 360.0f)
 			time -= 360.0f;
 		renderer.endFrame();
+		allocReporter.endFrame();
 	}
 
 #ifndef SDL_OUTPUT

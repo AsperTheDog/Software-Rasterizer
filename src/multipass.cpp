@@ -1,3 +1,4 @@
+#include <vector>
 #include "multipass.hpp"
 
 #include <gtc/matrix_transform.hpp>

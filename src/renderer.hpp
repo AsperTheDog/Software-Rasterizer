@@ -45,10 +45,16 @@ private:
 
 	struct BinNode {
 		uint32_t triangleID;
-		uint32_t next;
 		uint32_t v[3];
-		float tpw;
 	};
+
+	static constexpr uint32_t kNodesPerChunk = 7;
+	struct alignas(128) BinChunk {
+		uint32_t next;
+		uint32_t count;
+		BinNode nodes[kNodesPerChunk];
+	};
+	static_assert(sizeof(BinChunk) == 128);
 
 	struct DrawInfo {
 		uint32_t vertexBase;
@@ -90,7 +96,7 @@ private:
 	std::vector<uint8_t> geometryScratchpad;
 	std::vector<uint8_t> cullGeomScratchpad;
 	std::vector<uint8_t> clipcodes;
-	std::vector<BinNode> binningScratchpad;
+	std::vector<BinChunk> binningScratchpad;
 	std::vector<uint32_t> tileHeads;
 	uint32_t tileCount = 0;
 	uint32_t tileRowSize = 0;

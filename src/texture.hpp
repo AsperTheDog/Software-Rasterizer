@@ -4,6 +4,7 @@
 #include <bit>
 #include <cstring>
 #include <glm.hpp>
+#include <vector>
 #include <string_view>
 
 #ifndef SIMD_INTRINSICS

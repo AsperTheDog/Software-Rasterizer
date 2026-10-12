@@ -3,6 +3,7 @@
 #include <cassert>
 #include <cstdint>
 #include <glm.hpp>
+#include <vector>
 #include <limits>
 #include <optional>
 #include <span>
@@ -325,12 +326,15 @@ void rasterizeTriangleImpl(const RasterArgs& a)
 	const glm::vec3 edgeOriginX(p2.x, p3.x, p1.x);
 	const glm::vec3 edgeOriginY(p2.y, p3.y, p1.y);
 
-	// Per-row x bracket from the edge equations, padded so the exact per-pixel test still decides coverage.
 	const bool useRowSpans = (a.end.x - a.start.x) >= 3;
-	const glm::vec3 edgeInvStepX(
-		edgeStepX.x != 0.0f ? 1.0f / edgeStepX.x : 0.0f,
-		edgeStepX.y != 0.0f ? 1.0f / edgeStepX.y : 0.0f,
-		edgeStepX.z != 0.0f ? 1.0f / edgeStepX.z : 0.0f);
+	glm::vec3 edgeInvStepX(0.0f);
+	if (useRowSpans)
+	{
+		edgeInvStepX = glm::vec3(
+			edgeStepX.x != 0.0f ? 1.0f / edgeStepX.x : 0.0f,
+			edgeStepX.y != 0.0f ? 1.0f / edgeStepX.y : 0.0f,
+			edgeStepX.z != 0.0f ? 1.0f / edgeStepX.z : 0.0f);
+	}
 
 	for (int32_t y = a.start.y; y <= a.end.y; ++y)
 	{
@@ -367,16 +371,23 @@ void rasterizeTriangleImpl(const RasterArgs& a)
 				continue;
 		}
 
+		const float rowY = static_cast<float>(y) + 0.5f;
+		const float rowEdge0 = edgeStepY.x * (rowY - edgeOriginY.x);
+		const float rowEdge1 = edgeStepY.y * (rowY - edgeOriginY.y);
+		const float rowEdge2 = edgeStepY.z * (rowY - edgeOriginY.z);
+
 		for (int32_t x = xBegin; x <= xEnd; ++x)
 		{
-			const glm::vec2 pixelCenter = glm::vec2(static_cast<float>(x) + 0.5f, static_cast<float>(y) + 0.5f);
-			const glm::vec3 edge = edgeStepX * (pixelCenter.x - edgeOriginX) + edgeStepY * (pixelCenter.y - edgeOriginY);
+			const float pixelX = static_cast<float>(x) + 0.5f;
+			const float edge0 = edgeStepX.x * (pixelX - edgeOriginX.x) + rowEdge0;
+			const float edge1 = edgeStepX.y * (pixelX - edgeOriginX.y) + rowEdge1;
+			const float edge2 = edgeStepX.z * (pixelX - edgeOriginX.z) + rowEdge2;
 
-			if (edge.x < edgeBias.x || edge.y < edgeBias.y || edge.z < edgeBias.z)
+			if (edge0 < edgeBias.x || edge1 < edgeBias.y || edge2 < edgeBias.z)
 				continue;
 
-			const float w0 = edge.x * weightScale;
-			const float w1 = edge.y * weightScale;
+			const float w0 = edge0 * weightScale;
+			const float w1 = edge1 * weightScale;
 			const float w2 = 1.0f - w0 - w1;
 
 			const float depth = w0 * v1->position.z + w1 * v2->position.z + w2 * v3->position.z;
@@ -481,6 +492,7 @@ PipelineID CommandBuffer::registerPipeline(const PipelineState state)
 		InstancedPipeline<P>
 	);
 
+
 	if constexpr (HasAccurateMip<P>)
 	{
 		pipelines.back().getUV = [](const void* vOut)-> glm::vec2
@@ -505,6 +517,7 @@ PipelineID CommandBuffer::registerPipeline(const PipelineState state)
 		sizeof(typename P::VOutput),
 		InstancedPipeline<P>
 	);
+
 
 	return static_cast<PipelineID>(pipelines.size() - 1ull);
 }

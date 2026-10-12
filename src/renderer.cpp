@@ -1,3 +1,4 @@
+#include <vector>
 #include "renderer.hpp"
 #include "command_buffer.hpp"
 
@@ -32,6 +33,7 @@ namespace
 	constexpr uint32_t binNodesPerTile = 16;
 	constexpr uint32_t binNodesPerTriangle = 4;
 	constexpr uint32_t maxBinNodes = 1u << 23;
+	constexpr uint32_t binChunkBlock = 32;
 
 	void clipLerpRaw(uint8_t* dst, const uint8_t* a, const uint8_t* b, const float t, const uint32_t vOutStride)
 	{
@@ -107,9 +109,10 @@ void Renderer::execute(const CommandBuffer& commandBuffer)
 				triangleUniforms.resize(triangles);
 				if (currentPipeline->instanced)
 					triangleInstances.resize(triangles);
-				const uint32_t binNodeDemand = binNodesPerTile * tileCount + binNodesPerTriangle * triangles;
-				if (binNodeDemand > binningScratchpad.size())
-					binningScratchpad.resize(std::min(binNodeDemand, maxBinNodes));
+				const uint32_t binNodeDemand = std::min(binNodesPerTile * tileCount + binNodesPerTriangle * triangles, maxBinNodes);
+				const uint32_t binChunkDemand = binNodeDemand / kNodesPerChunk + tileCount * cpuCount + binChunkBlock * cpuCount;
+				if (binChunkDemand > binningScratchpad.size())
+					binningScratchpad.resize(binChunkDemand);
 				initVertexStarts();
 				geometryScratchpad.resize(static_cast<size_t>(vertices) * currentPipeline->vOutStride);
 				clipcodes.resize(vertices);
@@ -330,12 +333,11 @@ void Renderer::threadRunBinning(const uint32_t threadID)
 	for (uint32_t i = 0; i < tileCount; ++i)
 		myHeads[i] = UINT32_MAX;
 
-	constexpr uint32_t nodeBlock = 256;
-	uint32_t nodeCursor = 0;
-	uint32_t nodeEnd = 0;
+	uint32_t chunkCursor = 0;
+	uint32_t chunkEnd = 0;
 
 	const uint32_t cullCapacity = static_cast<uint32_t>(cullGeomScratchpad.size() / vOutStride);
-	const uint32_t binNodeCapacity = static_cast<uint32_t>(binningScratchpad.size());
+	const uint32_t binChunkCapacity = static_cast<uint32_t>(binningScratchpad.size());
 
 	const auto makeClipVertex = [&](const VOutBase* a, const VOutBase* b, const float t) -> uint32_t
 	{
@@ -370,36 +372,18 @@ void Renderer::threadRunBinning(const uint32_t threadID)
 		if (cullTriangle(a->position, b->position, c->position, cullMode))
 			return;
 
-		float tpw = 0.0f;
-
-		if (currentPipeline->getUV != nullptr) {
-			const auto getUV = currentPipeline->getUV;
-
-			const glm::vec2 uv0 = getUV(a);
-			const glm::vec2 uv1 = getUV(b);
-			const glm::vec2 uv2 = getUV(c);
-
-			const glm::vec2 uvEdge1 = uv1 - uv0;
-			const glm::vec2 uvEdge2 = uv2 - uv0;
-			const float uvArea = std::abs(uvEdge1.x * uvEdge2.y - uvEdge1.y * uvEdge2.x) * 0.5f;
-
-			const glm::vec2 sEdge1 = glm::vec2(b->position) - glm::vec2(a->position);
-			const glm::vec2 sEdge2 = glm::vec2(c->position) - glm::vec2(a->position);
-			const float screenArea = std::abs(sEdge1.x * sEdge2.y - sEdge1.y * sEdge2.x) * 0.5f;
-
-			if (uvArea > 0.00001f && screenArea > 0.00001f) {
-				tpw = std::sqrt(uvArea / screenArea);
-			}
-		}
-
 		const glm::vec2 pa(a->position), pb(b->position), pc(c->position);
 		const glm::vec2 bboxMin = glm::min(glm::min(pa, pb), pc);
 		const glm::vec2 bboxMax = glm::max(glm::max(pa, pb), pc);
 
-		const glm::vec2 tileMinF = glm::clamp(glm::floor(bboxMin / 16.0f), glm::vec2(0.0f), glm::vec2(maxTileIndex));
-		const glm::vec2 tileMaxF = glm::clamp(glm::floor(bboxMax / 16.0f), glm::vec2(0.0f), glm::vec2(maxTileIndex));
-		const glm::ivec2 tileMin = glm::ivec2(tileMinF);
-		const glm::ivec2 tileMax = glm::ivec2(tileMaxF);
+		const glm::vec2 screenMax = glm::vec2(activeExtent) - 1.0f;
+		const glm::vec2 pxMin = glm::max(glm::ceil(bboxMin - 0.5f), glm::vec2(0.0f));
+		const glm::vec2 pxMax = glm::min(glm::floor(bboxMax - 0.5f), screenMax);
+		if (pxMin.x > pxMax.x || pxMin.y > pxMax.y)
+			return;
+
+		const glm::ivec2 tileMin = glm::min(glm::ivec2(pxMin) >> 4, maxTileIndex);
+		const glm::ivec2 tileMax = glm::min(glm::ivec2(pxMax) >> 4, maxTileIndex);
 
 		triangleUniforms[triID] = info.uniform;
 		if (instanced)
@@ -409,28 +393,31 @@ void Renderer::threadRunBinning(const uint32_t threadID)
 		{
 			for (int32_t x = tileMin.x; x <= tileMax.x; ++x)
 			{
-				if (nodeCursor == nodeEnd)
-				{
-					nodeCursor = binningCounter.fetch_add(nodeBlock, std::memory_order_relaxed);
-					nodeEnd = nodeCursor + nodeBlock;
-				}
-				const uint32_t nodeIdx = nodeCursor++;
-				if (nodeIdx >= binNodeCapacity) [[unlikely]]
-				{
-					binningOverflowCounter.fetch_add(1, std::memory_order_relaxed);
-					return;
-				}
-
-				BinNode& node = binningScratchpad[nodeIdx];
-				node.triangleID = triID;
-				node.v[0] = sa;
-				node.v[1] = sb;
-				node.v[2] = sc;
-				node.tpw = tpw;
-
 				const uint32_t tileIdx = static_cast<uint32_t>(y) * tileRowSize + static_cast<uint32_t>(x);
-				node.next = myHeads[tileIdx];
-				myHeads[tileIdx] = nodeIdx;
+
+				uint32_t head = myHeads[tileIdx];
+				if (head == UINT32_MAX || binningScratchpad[head].count == kNodesPerChunk)
+				{
+					if (chunkCursor == chunkEnd)
+					{
+						chunkCursor = binningCounter.fetch_add(binChunkBlock, std::memory_order_relaxed);
+						chunkEnd = chunkCursor + binChunkBlock;
+					}
+					const uint32_t chunkIdx = chunkCursor++;
+					if (chunkIdx >= binChunkCapacity) [[unlikely]]
+					{
+						binningOverflowCounter.fetch_add(1, std::memory_order_relaxed);
+						return;
+					}
+
+					BinChunk& fresh = binningScratchpad[chunkIdx];
+					fresh.next = head;
+					fresh.count = 0;
+					myHeads[tileIdx] = head = chunkIdx;
+				}
+
+				BinChunk& chunk = binningScratchpad[head];
+				chunk.nodes[chunk.count++] = BinNode{ triID, { sa, sb, sc } };
 			}
 		}
 	};
@@ -553,12 +540,12 @@ void Renderer::threadRunFragment()
 
 		for (uint32_t t = 0; t < cpuCount; ++t)
 		{
-			uint32_t nodeIdx = tileHeads[static_cast<size_t>(t) * tileCount + tileIdx];
-			while (nodeIdx != UINT32_MAX)
+			uint32_t chunkIdx = tileHeads[static_cast<size_t>(t) * tileCount + tileIdx];
+			while (chunkIdx != UINT32_MAX)
 			{
-				const BinNode& node = binningScratchpad[nodeIdx];
-				localBinNodes.push_back(node);
-				nodeIdx = node.next;
+				const BinChunk& chunk = binningScratchpad[chunkIdx];
+				localBinNodes.insert(localBinNodes.end(), chunk.nodes, chunk.nodes + chunk.count);
+				chunkIdx = chunk.next;
 			}
 		}
 
@@ -580,14 +567,35 @@ void Renderer::threadRunFragment()
 			const glm::vec2 bboxMin = glm::min(glm::min(p1, p2), p3);
 			const glm::vec2 bboxMax = glm::max(glm::max(p1, p2), p3);
 
-			const glm::vec2 tileMin = glm::vec2(tileCoords);
-			const glm::vec2 tileMax = glm::vec2(glm::min(tileCoords + glm::ivec2(15), glm::ivec2(activeExtent) - glm::ivec2(1)));
-			const glm::ivec2 start = glm::ivec2(glm::clamp(bboxMin, tileMin, tileMax));
-			const glm::ivec2 end = glm::ivec2(glm::clamp(bboxMax, tileMin, tileMax));
+			const glm::ivec2 tileMin = tileCoords;
+			const glm::ivec2 tileMax = glm::min(tileCoords + glm::ivec2(15), glm::ivec2(activeExtent) - glm::ivec2(1));
+			const glm::ivec2 start = glm::max(glm::ivec2(glm::ceil(bboxMin - 0.5f)), tileMin);
+			const glm::ivec2 end = glm::min(glm::ivec2(glm::floor(bboxMax - 0.5f)), tileMax);
+			if (start.x > end.x || start.y > end.y)
+				continue;
 
 			const float triangleArea = (p2.x - p1.x) * (p3.y - p1.y) - (p2.y - p1.y) * (p3.x - p1.x);
 			if (std::abs(triangleArea) < 0.0001f)
 				continue;
+
+			float tpw = 0.0f;
+
+			if (currentPipeline->getUV != nullptr)
+			{
+				const auto getUV = currentPipeline->getUV;
+
+				const glm::vec2 uv0 = getUV(v1);
+				const glm::vec2 uv1 = getUV(v2);
+				const glm::vec2 uv2 = getUV(v3);
+
+				const glm::vec2 uvEdge1 = uv1 - uv0;
+				const glm::vec2 uvEdge2 = uv2 - uv0;
+				const float uvArea = std::abs(uvEdge1.x * uvEdge2.y - uvEdge1.y * uvEdge2.x) * 0.5f;
+				const float screenArea = std::abs(triangleArea) * 0.5f;
+
+				if (uvArea > 0.00001f && screenArea > 0.00001f)
+					tpw = std::sqrt(uvArea / screenArea);
+			}
 
 			const RasterArgs args{
 				.v1 = v1,
@@ -601,7 +609,7 @@ void Renderer::threadRunFragment()
 				.end = end,
 				.invArea = 1.0f / triangleArea,
 				.downsample = activeDownsample,
-				.tpw = node.tpw,
+				.tpw = tpw,
 				.state = state,
 			};
 			rasterize(args);

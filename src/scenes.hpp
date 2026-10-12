@@ -2,8 +2,6 @@
 #include <glm.hpp>
 #include <array>
 #include <concepts>
-#include <cstdint>
-#include <limits>
 #include <vector>
 
 #include "camera.hpp"
@@ -66,7 +64,7 @@ public:
 	typedef TargetList<glm::u8vec4> Targets;
 
 	static VOutput vertexShader(const VInput* vIn, const Uniform* uni);
-	static std::optional<BasicColorOut> fragmentShader(const VOutput* vOut, const Uniform* uni, const float tpw);
+	static std::optional<BasicColorOut> fragmentShader(const VOutput* vOut, const Uniform* uni, float tpw);
 };
 
 class GltfScene
@@ -80,7 +78,7 @@ public:
 	void record(CommandBuffer& commandBuffer, Texture<glm::u8vec4>& framebuffer, Texture<glm::vec1>& depthBuffer, Camera& camera, const float time);
 
 private:
-	static constexpr const char* kModelPath = "../assets/bistro.glb";
+	static constexpr const char* kModelPath = "../assets/hairball.glb";
 	static constexpr float kRotateSpeed = 0.f;
 
 	GltfModel model;

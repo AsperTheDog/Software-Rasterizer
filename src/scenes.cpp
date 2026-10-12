@@ -1,3 +1,4 @@
+#include <vector>
 #include "scenes.hpp"
 
 #define GLM_ENABLE_EXPERIMENTAL
@@ -5,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numbers>
 #include <random>
 
 const glm::vec3 kLightDirection = glm::normalize(glm::vec3(1.0f, 1.0f, -1.0f));
@@ -884,7 +886,7 @@ void ComputeScene::record(CommandBuffer& commandBuffer, Texture<glm::u8vec4>& fr
 
 namespace
 {
-	constexpr float kPi = 3.14159265358979f;
+	constexpr float kPi = std::numbers::pi_v<float>;
 	constexpr glm::vec3 kPbrLightColor{ 3.0f, 2.95f, 2.85f };
 	constexpr glm::vec3 kPbrSkyColor{ 0.35f, 0.42f, 0.55f };
 	constexpr glm::vec3 kPbrGroundColor{ 0.12f, 0.10f, 0.09f };
@@ -1000,7 +1002,7 @@ const char* GltfScene::name()
 
 CameraSetup GltfScene::cameraSetup()
 {
-	const glm::vec3 position{ 1.8f, 1.15f, 2.7f };
+	constexpr glm::vec3 position{ 1.8f, 1.15f, 2.7f };
 
 	return { .position = position, .direction = glm::normalize(-position), .fov = 45.0f };
 }
