@@ -73,19 +73,19 @@ All numbers are per frame at 1920x1080 rendering to an sRGB target and presentin
 
 | Scene | Triangles | Draw batches | Vertex | Binning | Fragment | Frame | FPS |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Helmet (PBR) | 15,452 | 1 | 0.60 ms | 0.15 ms | 10.98 ms | 13.41 ms | 74.6 |
-| Sponza (PBR) | 262,267 | 2 | 2.47 ms | 1.02 ms | 61.32 ms | 67.24 ms | 14.9 |
-| Bistro (PBR) | 2,828,266 | 2 | 27.98 ms | 7.48 ms | 71.79 ms | 108.49 ms | 9.2 |
-| Hairball (PBR) | 2,850,000 | 1 | 8.41 ms | 10.16 ms | 58.17 ms | 78.56 ms | 12.7 |
-| Cubes (instanced) | 1,500 | 1 | 0.49 ms | 0.12 ms | 13.80 ms | 16.04 ms | 62.3 |
-| Torus knot | 9,216 | 1 | 0.54 ms | 0.12 ms | 5.32 ms | 7.52 ms | 133.0 |
-| Terrain | 73,728 | 1 | 0.69 ms | 0.35 ms | 8.54 ms | 11.26 ms | 88.8 |
-| Stress | 8,000 | 1 | 0.60 ms | 0.19 ms | 9.05 ms | 11.78 ms | 84.9 |
-| Shadow | 18,554 | 2 | 0.99 ms | 0.25 ms | 15.56 ms | 18.36 ms | 54.5 |
-| Deferred (32 lights) | 9,663 | 3 | 2.76 ms | 0.39 ms | 37.62 ms | 42.89 ms | 23.3 |
-| Deferred + bloom + postfx | 9,668 | 8 | 3.35 ms | 0.96 ms | 85.71 ms | 92.05 ms | 10.9 |
-| Monitor | 9,350 | 3 | 0.81 ms | 0.26 ms | 2.81 ms | 5.31 ms | 188.5 |
-| Neon | 9,288 | 1 | 0.48 ms | 0.12 ms | 3.12 ms | 5.11 ms | 195.9 |
+| Helmet (PBR) | 15,452 | 1 | 0.49 ms | 0.14 ms | 10.44 ms | 12.47 ms | 80.2 |
+| Sponza (PBR) | 262,267 | 2 | 2.22 ms | 1.15 ms | 61.06 ms | 65.97 ms | 15.2 |
+| Bistro (PBR) | 2,828,266 | 2 | 26.71 ms | 7.94 ms | 70.96 ms | 106.85 ms | 9.4 |
+| Hairball (PBR) | 2,850,000 | 1 | 8.04 ms | 9.91 ms | 42.66 ms | 62.03 ms | 16.1 |
+| Cubes (instanced) | 1,500 | 1 | 0.56 ms | 0.16 ms | 14.11 ms | 16.46 ms | 60.8 |
+| Torus knot | 9,216 | 1 | 0.58 ms | 0.13 ms | 5.49 ms | 7.54 ms | 132.6 |
+| Terrain | 73,728 | 1 | 0.58 ms | 0.38 ms | 8.18 ms | 10.52 ms | 95.1 |
+| Stress | 8,000 | 1 | 0.63 ms | 0.24 ms | 9.06 ms | 11.45 ms | 87.3 |
+| Shadow | 18,554 | 2 | 0.90 ms | 0.29 ms | 15.00 ms | 17.77 ms | 56.3 |
+| Deferred (32 lights) | 9,663 | 3 | 2.61 ms | 0.53 ms | 36.31 ms | 40.88 ms | 24.5 |
+| Deferred + bloom + postfx | 9,668 | 8 | 3.16 ms | 0.99 ms | 84.71 ms | 90.29 ms | 11.1 |
+| Monitor | 9,350 | 3 | 0.72 ms | 0.21 ms | 2.80 ms | 4.91 ms | 203.7 |
+| Neon | 9,288 | 1 | 0.44 ms | 0.13 ms | 2.92 ms | 4.66 ms | 214.6 |
 
 # Building
 This is a very simple Cpp 20 project. The main two dependencies are the header only libraris [GLM](https://github.com/g-truc/glm) and [STB](https://github.com/nothings/stb) (specifically STB_Image). The .glb loader also needs [tinygltf](https://github.com/syoyo/tinygltf) v3, which is a header plus its .c file, so point TINYGLTF_INCLUDE_DIR at the folder holding tiny_gltf_v3.h, tiny_gltf_v3.c and tinygltf_json_c.h. Just tell CMake where they are when building. Optionally, you can also point to the location of SDL3 if you wish to use the SDL3 output. The project expects a path to the include files folder and a path to the .lib folder.
@@ -96,7 +96,7 @@ This is a very simple Cpp 20 project. The main two dependencies are the header o
 
 Capture of the cubes scene from [scenes.hpp](https://github.com/AsperTheDog/Software-Rasterizer/blob/main/src/scenes.hpp). It uses a simple diffuse lighting pipeline and renders a cube 125 times with a single instanced draw, where the instance data holds each cube's model matrix and color. The cubes also have a texture which is sampled with mipmapping using trilinear filtering. The render is done to an SRGB image which is then shown through an SDL3 window.
 
-Properties: 1920x1080 sRGB target shown through the SDL3 window, 1,500 triangles (125 instances) in 1 draw batch, trilinear mipmapped texture. Performance: 16.04 ms per frame (62.3 fps), 0.49 ms in the vertex stage, 0.12 ms in binning and 13.80 ms in the fragment stage.
+Properties: 1920x1080 sRGB target shown through the SDL3 window, 1,500 triangles (125 instances) in 1 draw batch, trilinear mipmapped texture. Performance: 16.46 ms per frame (60.8 fps), 0.56 ms in the vertex stage, 0.16 ms in binning and 14.11 ms in the fragment stage.
 
 <img width="2560" height="1380" alt="image" src="https://github.com/user-attachments/assets/1dae0e9a-209b-4b43-b021-e95eca43f6bf" />
 
@@ -108,31 +108,31 @@ Capture of the same render loop than the previous image, but the output is being
 
 Capture of a helmet GLB using PRB rendering, it uses the GLTF scene defined in [scenes.hpp](https://github.com/AsperTheDog/Software-Rasterizer/blob/main/src/scenes.hpp).
 
-Properties: DamagedHelmet.glb, 1920x1080 sRGB target, 15,452 triangles in 1 draw batch, camera at (1.8, 1.15, 2.7). Performance: 13.41 ms per frame (74.6 fps), 0.60 ms in the vertex stage, 0.15 ms in binning and 10.98 ms in the fragment stage.
+Properties: DamagedHelmet.glb, 1920x1080 sRGB target, 15,452 triangles in 1 draw batch, camera at (1.8, 1.15, 2.7). Performance: 12.47 ms per frame (80.2 fps), 0.49 ms in the vertex stage, 0.14 ms in binning and 10.44 ms in the fragment stage.
 
 <img width="1922" height="1119" alt="torus_knot" src="https://github.com/user-attachments/assets/59341ba0-825d-4170-a3dc-5cc715d35ff2" />
 
 Captura of a Torus Knot created using the Torus Knot Scene, defined in [scenes.hpp](https://github.com/AsperTheDog/Software-Rasterizer/blob/main/src/scenes.hpp)
 
-Properties: 1920x1080 sRGB target, 9,216 triangles in 1 draw batch, camera at (0, 9, 24). Performance: 7.52 ms per frame (133.0 fps), 0.54 ms in the vertex stage, 0.12 ms in binning and 5.32 ms in the fragment stage.
+Properties: 1920x1080 sRGB target, 9,216 triangles in 1 draw batch, camera at (0, 9, 24). Performance: 7.54 ms per frame (132.6 fps), 0.58 ms in the vertex stage, 0.13 ms in binning and 5.49 ms in the fragment stage.
 
 <img width="1922" height="1119" alt="sponza" src="https://github.com/user-attachments/assets/934e8d4a-d9ba-475e-b983-4611def4ddb5" />
 
 Capture of Sponza using PBR rendering, it uses the same pipeline and scene system as with the helmet.
 
-Properties: sponza.glb, 1920x1080 sRGB target, 262,267 triangles in 2 draw batches, camera at (0.72, -0.25, -0.005) looking down the nave. Performance: 67.24 ms per frame (14.9 fps), 2.47 ms in the vertex stage, 1.02 ms in binning and 61.32 ms in the fragment stage.
+Properties: sponza.glb, 1920x1080 sRGB target, 262,267 triangles in 2 draw batches, camera at (0.72, -0.25, -0.005) looking down the nave. Performance: 65.97 ms per frame (15.2 fps), 2.22 ms in the vertex stage, 1.15 ms in binning and 61.06 ms in the fragment stage.
 
 <img width="1922" height="1119" alt="bistro" src="https://github.com/user-attachments/assets/142f5fc9-86b9-4fc0-b76d-767e3ae16dd7" />
 
 Capture of Bistro using PBR rendering, it uses the same pipeline and scene system as with the helmet and Sponza.
 
-Properties: bistro.glb, 1920x1080 sRGB target, 2,828,266 triangles in 2 draw batches, camera at (-0.55, -0.09, -0.09). Performance: 108.49 ms per frame (9.2 fps), 27.98 ms in the vertex stage, 7.48 ms in binning and 71.79 ms in the fragment stage.
+Properties: bistro.glb, 1920x1080 sRGB target, 2,828,266 triangles in 2 draw batches, camera at (-0.55, -0.09, -0.09). Performance: 106.85 ms per frame (9.4 fps), 26.71 ms in the vertex stage, 7.94 ms in binning and 70.96 ms in the fragment stage.
 
 <img width="1922" height="1119" alt="hairball" src="https://github.com/user-attachments/assets/695a14b4-eb0a-4e3b-bed1-628445f0d1b3" />
 
 Capture of the hairball model using the same PBR pipeline and scene system, a stress test for binning and rasterization since it is made of millions of thin triangles.
 
-Properties: hairball.glb, 1920x1080 sRGB target, 2,850,000 triangles in 1 draw batch, camera at (1.8, 1.15, 2.7). Performance: 78.56 ms per frame (12.7 fps), 8.41 ms in the vertex stage, 10.16 ms in binning and 58.17 ms in the fragment stage.
+Properties: hairball.glb, 1920x1080 sRGB target, 2,850,000 triangles in 1 draw batch, camera at (1.8, 1.15, 2.7). Performance: 62.03 ms per frame (16.1 fps), 8.04 ms in the vertex stage, 9.91 ms in binning and 42.66 ms in the fragment stage.
 
 ---
 
@@ -140,16 +140,16 @@ Properties: hairball.glb, 1920x1080 sRGB target, 2,850,000 triangles in 1 draw b
 
 Capture that mixes together a lot of techniques. This scene is rendered with many lights using deferred rendering (deferred scene from [multipass.hpp](https://github.com/AsperTheDog/Software-Rasterizer/blob/main/src/multipass.hpp)), and has bloom and post processing on top (bloom scene and postFX scene, both in [multipass.hpp](https://github.com/AsperTheDog/Software-Rasterizer/blob/main/src/scenes.hpp))
 
-Properties: 1920x1080 sRGB target, 9,668 triangles in 8 draw batches (G-buffer, 32 point lights, bloom and post processing passes), camera at (0, 9, 17). Performance: 92.05 ms per frame (10.9 fps), 3.35 ms in the vertex stage, 0.96 ms in binning and 85.71 ms in the fragment stage.
+Properties: 1920x1080 sRGB target, 9,668 triangles in 8 draw batches (G-buffer, 32 point lights, bloom and post processing passes), camera at (0, 9, 17). Performance: 90.29 ms per frame (11.1 fps), 3.16 ms in the vertex stage, 0.99 ms in binning and 84.71 ms in the fragment stage.
 
 <img width="1922" height="1119" alt="shadow" src="https://github.com/user-attachments/assets/064e8c0a-9f13-4212-a09c-525ed225d04f" />
 
 Capture of the shadow scene from [multipass.hpp](https://github.com/AsperTheDog/Software-Rasterizer/blob/main/src/multipass.hpp), a depth-only pass from the light that is sampled in the lit pass.
 
-Properties: 1920x1080 sRGB target, 18,554 triangles in 2 draw batches, camera at (0, 9, 17). Performance: 18.36 ms per frame (54.5 fps), 0.99 ms in the vertex stage, 0.25 ms in binning and 15.56 ms in the fragment stage.
+Properties: 1920x1080 sRGB target, 18,554 triangles in 2 draw batches, camera at (0, 9, 17). Performance: 17.77 ms per frame (56.3 fps), 0.90 ms in the vertex stage, 0.29 ms in binning and 15.00 ms in the fragment stage.
 
 <img width="1922" height="1119" alt="monitor" src="https://github.com/user-attachments/assets/434c9d31-d304-4a22-bacb-bb0166dbf589" />
 
 Capture of the monitor scene from [multipass.hpp](https://github.com/AsperTheDog/Software-Rasterizer/blob/main/src/multipass.hpp), a small scene rendered into a texture that is displayed on a screen inside a room of spinning cubes.
 
-Properties: 1920x1080 sRGB target plus an offscreen render target, 9,350 triangles in 3 draw batches, camera at (0, 0, 9). Performance: 5.31 ms per frame (188.5 fps), 0.81 ms in the vertex stage, 0.26 ms in binning and 2.81 ms in the fragment stage.
+Properties: 1920x1080 sRGB target plus an offscreen render target, 9,350 triangles in 3 draw batches, camera at (0, 0, 9). Performance: 4.91 ms per frame (203.7 fps), 0.72 ms in the vertex stage, 0.21 ms in binning and 2.80 ms in the fragment stage.
