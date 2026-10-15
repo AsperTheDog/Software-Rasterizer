@@ -126,6 +126,7 @@ private:
 	const CommandBuffer::ComputeCommand* currentComputeCall = nullptr;
 	CommandBuffer::FillTarget currentClearTargets[kMaxColorTargets + 1];
 	uint32_t currentClearTargetCount = 0;
+	uint32_t fusedClearCount = 0;
 
 	double vertexTime = 0.0f, binningTime = 0.0f, fragmentTime = 0.0f, frameTime = 0.0f, computeTime = 0.0f, clearTime = 0.0f;
 	std::chrono::time_point<std::chrono::steady_clock> prevFrame;

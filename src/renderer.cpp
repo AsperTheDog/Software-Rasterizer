@@ -77,11 +77,30 @@ void Renderer::execute(const CommandBuffer& commandBuffer)
 				currentClearTargetCount = 0;
 				for (const std::optional<CommandBuffer::FillTarget>& colorClear : arg.colorClears)
 					if (colorClear)
+					{
 						currentClearTargets[currentClearTargetCount++] = *colorClear;
+					}
 				if (arg.depthClear)
+				{
 					currentClearTargets[currentClearTargetCount++] = *arg.depthClear;
+				}
+				fusedClearCount = 0;
 				if (currentClearTargetCount > 0)
-					dispatchClear();
+				{
+					bool fuse = activeDownsample == 1;
+					for (uint32_t i = 0; i < currentClearTargetCount; ++i)
+					{
+						fuse = fuse && currentClearTargets[i].size == activeExtent;
+					}
+					if (fuse)
+					{
+						fusedClearCount = currentClearTargetCount;
+					}
+					else
+					{
+						dispatchClear();
+					}
+				}
 
 				uint32_t vertices = 0;
 				uint32_t triangles = 0;
@@ -539,6 +558,12 @@ void Renderer::threadRunFragment()
 			break;
 
 		glm::ivec2 tileCoords = glm::ivec2((tileIdx) % tileRowSize, (tileIdx) / tileRowSize) * 16;
+
+		for (uint32_t i = 0; i < fusedClearCount; ++i)
+		{
+			const CommandBuffer::FillTarget& target = currentClearTargets[i];
+			target.fillTile(target.texture, tileIdx % tileRowSize, tileIdx / tileRowSize, target.valueBytes);
+		}
 		localBinNodes.clear();
 		runEnds.clear();
 

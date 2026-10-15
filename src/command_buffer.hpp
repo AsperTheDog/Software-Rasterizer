@@ -86,6 +86,9 @@ public:
 		void* texture;
 		uint32_t pixelCount;
 		void (*fillRange)(void* texture, uint32_t begin, uint32_t end, const void* valueBytes);
+		glm::uvec2 size;
+		// Fills the part of the 16x16 tile (tx, ty) that lies inside the texture
+		void (*fillTile)(void* texture, uint32_t tx, uint32_t ty, const void* valueBytes);
 		alignas(16) uint8_t valueBytes[16];
 	};
 
@@ -147,6 +150,26 @@ public:
 			{
 				Texture<T>& t = *static_cast<Texture<T>*>(tex);
 				std::ranges::fill(t.data() + begin, t.data() + end, *static_cast<const T*>(valueBytes));
+			},
+			.size = texture.getSize(),
+			.fillTile = [](void* tex, const uint32_t tx, const uint32_t ty, const void* valueBytes)
+			{
+				Texture<T>& t = *static_cast<Texture<T>*>(tex);
+				const T value = *static_cast<const T*>(valueBytes);
+				const glm::uvec2 size = t.getSize();
+				const uint32_t w = std::min(16u, size.x - tx * 16);
+				const uint32_t h = std::min(16u, size.y - ty * 16);
+				if (t.isSwizzled())
+				{
+					T* block = t.data() + (static_cast<size_t>(expandBits(ty * 16)) << 1 | expandBits(tx * 16));
+					std::ranges::fill(block, block + static_cast<size_t>(w) * h, value);
+					return;
+				}
+				for (uint32_t y = 0; y < h; ++y)
+				{
+					T* row = t.data() + static_cast<size_t>(ty * 16 + y) * size.x + tx * 16;
+					std::ranges::fill(row, row + w, value);
+				}
 			},
 		};
 
@@ -357,7 +380,7 @@ void rasterizeTriangleImpl(const RasterArgs& a)
 	const glm::vec3 edgeOriginX(p2.x, p3.x, p1.x);
 	const glm::vec3 edgeOriginY(p2.y, p3.y, p1.y);
 
-	// Per-row analytic span bounds were removed: with the SIMD coverage test below they cost more than they saved.
+	// Per-row analytic span bounds not added since with the SIMD coverage test below they cost more than they saved.
 
 	for (int32_t y = a.start.y; y <= a.end.y; ++y)
 	{
