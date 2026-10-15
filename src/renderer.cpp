@@ -106,10 +106,7 @@ void Renderer::execute(const CommandBuffer& commandBuffer)
 				}
 				totalTriangles = triangles;
 				totalVertices = vertices;
-				triangleUniforms.resize(triangles);
 				triangleVertices.resize(static_cast<size_t>(triangles) * 2);
-				if (currentPipeline->instanced)
-					triangleInstances.resize(triangles);
 				const uint32_t binNodeDemand = std::min(binNodesPerTile * tileCount + binNodesPerTriangle * triangles, maxBinNodes);
 				const uint32_t binChunkDemand = binNodeDemand / kNodesPerChunk + tileCount * cpuCount + binChunkBlock * cpuCount;
 				if (binChunkDemand > binningScratchpad.size())
@@ -361,7 +358,7 @@ void Renderer::threadRunBinning(const uint32_t threadID)
 		return idx | CULL_BIT;
 	};
 
-	const auto emitTriangle = [&](const uint32_t triID, const DrawInfo& info, const uint32_t sub, const uint32_t sa, const uint32_t sb, const uint32_t sc)
+	const auto emitTriangle = [&](const uint32_t triID, const uint32_t kind, const uint32_t sa, const uint32_t sb, const uint32_t sc)
 	{
 		const VOutBase* a = resolveVertex(sa, vOutStride);
 		const VOutBase* b = resolveVertex(sb, vOutStride);
@@ -386,11 +383,9 @@ void Renderer::threadRunBinning(const uint32_t threadID)
 		const glm::ivec2 tileMin = glm::min(glm::ivec2(pxMin) >> 4, maxTileIndex);
 		const glm::ivec2 tileMax = glm::min(glm::ivec2(pxMax) >> 4, maxTileIndex);
 
-		const BinNode node = (triID << 1) | sub;
-		triangleVertices[node] = { { sa, sb, sc } };
-		triangleUniforms[triID] = info.uniform;
-		if (instanced)
-			triangleInstances[triID] = info.instance;
+		const BinNode node = (triID << 2) | kind;
+		if (kind != 0)
+			triangleVertices[(triID << 1) | (kind - 1)] = { { sa, sb, sc } };
 
 		// Tried an exact triangle-vs-tile edge test here with no net frame gain on Hairball
 		for (int32_t y = tileMin.y; y <= tileMax.y; ++y)
@@ -482,7 +477,7 @@ void Renderer::threadRunBinning(const uint32_t threadID)
 
 			if (((c0 | c1 | c2) & CLIP_NEAR_PLANE) == 0)
 			{
-				emitTriangle(nextTri, info, 0, slot[0], slot[1], slot[2]);
+				emitTriangle(nextTri, 0, slot[0], slot[1], slot[2]);
 				continue;
 			}
 
@@ -520,7 +515,7 @@ void Renderer::threadRunBinning(const uint32_t threadID)
 				}
 			}
 			for (uint32_t k = 1; k + 1 < polyCount; ++k)
-				emitTriangle(nextTri, info, k - 1, poly[0], poly[k], poly[k + 1]);
+				emitTriangle(nextTri, k, poly[0], poly[k], poly[k + 1]);
 		}
 	}
 }
@@ -585,13 +580,44 @@ void Renderer::threadRunFragment()
 		const PipelineState& state = currentPipeline->state;
 		auto rasterize = currentPipeline->rasterizeTriangle;
 
+		const DrawInfo* cachedInfo = nullptr;
 		for (const BinNode node : localBinNodes)
 		{
-			const TriangleVertices& tv = triangleVertices[node];
+			const uint32_t triID = node >> 2;
+			if (cachedInfo == nullptr || triID - cachedInfo->triBase >= cachedInfo->triCount)
+			{
+				uint32_t lo = 0;
+				uint32_t hi = static_cast<uint32_t>(drawInfos.size());
+				while (lo + 1 < hi)
+				{
+					const uint32_t mid = (lo + hi) / 2;
+					if (drawInfos[mid].triBase <= triID)
+						lo = mid;
+					else
+						hi = mid;
+				}
+				cachedInfo = &drawInfos[lo];
+			}
+			const DrawInfo& info = *cachedInfo;
+
+			uint32_t slot[3];
+			if ((node & 3u) != 0)
+			{
+				const TriangleVertices& tv = triangleVertices[(triID << 1) | ((node & 3u) - 1)];
+				slot[0] = tv.v[0];
+				slot[1] = tv.v[1];
+				slot[2] = tv.v[2];
+			}
+			else
+			{
+				const uint32_t localTri = triID - info.triBase;
+				for (uint32_t k = 0; k < 3; ++k)
+					slot[k] = info.vertexBase + (info.indexData != nullptr ? info.indexData[localTri * 3 + k] : localTri * 3 + k);
+			}
 			// Tried hoisting this setup to emit time, Hairball binning cost outweighed the savings.
-			const VOutBase* v1 = resolveVertex(tv.v[0], vOutStride);
-			const VOutBase* v2 = resolveVertex(tv.v[1], vOutStride);
-			const VOutBase* v3 = resolveVertex(tv.v[2], vOutStride);
+			const VOutBase* v1 = resolveVertex(slot[0], vOutStride);
+			const VOutBase* v2 = resolveVertex(slot[1], vOutStride);
+			const VOutBase* v3 = resolveVertex(slot[2], vOutStride);
 
 			const glm::vec2 p1 = glm::vec2(v1->position);
 			const glm::vec2 p2 = glm::vec2(v2->position);
@@ -634,8 +660,8 @@ void Renderer::threadRunFragment()
 				.v1 = v1,
 				.v2 = v2,
 				.v3 = v3,
-				.uniform = triangleUniforms[node >> 1],
-				.instance = instanced ? triangleInstances[node >> 1] : nullptr,
+				.uniform = info.uniform,
+				.instance = instanced ? info.instance : nullptr,
 				.framebuffers = batch.framebuffers.data(),
 				.depthBuffer = batch.depthBuffer,
 				.start = start,

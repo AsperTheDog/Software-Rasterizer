@@ -5,6 +5,7 @@
 #include <cstring>
 #include <glm.hpp>
 #include <vector>
+#include <new>
 #include <string_view>
 
 #ifndef SIMD_INTRINSICS
@@ -56,6 +57,17 @@ inline constexpr std::array<uint16_t, 256> expandByteTable = []
 enum Filter : uint8_t { NEAREST, BILINEAR, TRILINEAR };
 enum Border : uint8_t { CLAMP, REPEAT };
 enum Format : uint8_t { SRGB, UNORM };
+
+template<typename T>
+struct CacheAlignedAllocator
+{
+    using value_type = T;
+    CacheAlignedAllocator() = default;
+    template<typename U> CacheAlignedAllocator(const CacheAlignedAllocator<U>&) noexcept {}
+    [[nodiscard]] T* allocate(const size_t n) { return static_cast<T*>(::operator new(n * sizeof(T), std::align_val_t(64))); }
+    void deallocate(T* p, size_t) noexcept { ::operator delete(p, std::align_val_t(64)); }
+    template<typename U> bool operator==(const CacheAlignedAllocator<U>&) const noexcept { return true; }
+};
 
 template<PixelFormat Pixel>
 class MipTexture;
@@ -423,7 +435,7 @@ private:
 	Border border = CLAMP;
 	Format format = UNORM;
     glm::uvec2 size;
-    std::vector<Pixel> pixels;
+    std::vector<Pixel, CacheAlignedAllocator<Pixel>> pixels;
 	bool swizzled = false;
 
 	friend class MipTexture<Pixel>;
