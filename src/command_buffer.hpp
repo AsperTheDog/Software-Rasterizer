@@ -1,5 +1,6 @@
 #pragma once
 #include <array>
+#include <bit>
 #include <cassert>
 #include <cstdint>
 #include <glm.hpp>
@@ -303,6 +304,32 @@ void writeTargets(const RasterArgs& a, const glm::vec4* colors, const uint32_t b
 	}(std::index_sequence_for<T...>{});
 }
 
+// Bit i is set when pixel x + i passes all three edge tests. Same arithmetic as the scalar test, four pixels at a time.
+inline uint32_t coverMask4(const int32_t x, const glm::vec3& stepX, const glm::vec3& originX, const glm::vec3& rowEdge, const glm::vec3& bias)
+{
+	const float pixelX = static_cast<float>(x) + 0.5f;
+#if SIMD_INTRINSICS
+	const __m128 px = _mm_add_ps(_mm_set1_ps(pixelX), _mm_setr_ps(0.0f, 1.0f, 2.0f, 3.0f));
+	const __m128 e0 = _mm_add_ps(_mm_mul_ps(_mm_set1_ps(stepX.x), _mm_sub_ps(px, _mm_set1_ps(originX.x))), _mm_set1_ps(rowEdge.x));
+	const __m128 e1 = _mm_add_ps(_mm_mul_ps(_mm_set1_ps(stepX.y), _mm_sub_ps(px, _mm_set1_ps(originX.y))), _mm_set1_ps(rowEdge.y));
+	const __m128 e2 = _mm_add_ps(_mm_mul_ps(_mm_set1_ps(stepX.z), _mm_sub_ps(px, _mm_set1_ps(originX.z))), _mm_set1_ps(rowEdge.z));
+	const __m128 outside = _mm_or_ps(_mm_or_ps(_mm_cmplt_ps(e0, _mm_set1_ps(bias.x)), _mm_cmplt_ps(e1, _mm_set1_ps(bias.y))), _mm_cmplt_ps(e2, _mm_set1_ps(bias.z)));
+	return ~static_cast<uint32_t>(_mm_movemask_ps(outside)) & 0xFu;
+#else
+	uint32_t mask = 0;
+	for (uint32_t i = 0; i < 4; ++i)
+	{
+		const float px = pixelX + static_cast<float>(i);
+		const float e0 = stepX.x * (px - originX.x) + rowEdge.x;
+		const float e1 = stepX.y * (px - originX.y) + rowEdge.y;
+		const float e2 = stepX.z * (px - originX.z) + rowEdge.z;
+		if (!(e0 < bias.x || e1 < bias.y || e2 < bias.z))
+			mask |= 1u << i;
+	}
+	return mask;
+#endif
+}
+
 template<Pipeline P>
 void rasterizeTriangleImpl(const RasterArgs& a)
 {
@@ -330,65 +357,29 @@ void rasterizeTriangleImpl(const RasterArgs& a)
 	const glm::vec3 edgeOriginX(p2.x, p3.x, p1.x);
 	const glm::vec3 edgeOriginY(p2.y, p3.y, p1.y);
 
-	const bool useRowSpans = (a.end.x - a.start.x) >= 7;
-	glm::vec3 edgeInvStepX(0.0f);
-	if (useRowSpans)
-	{
-		edgeInvStepX = glm::vec3(
-			edgeStepX.x != 0.0f ? 1.0f / edgeStepX.x : 0.0f,
-			edgeStepX.y != 0.0f ? 1.0f / edgeStepX.y : 0.0f,
-			edgeStepX.z != 0.0f ? 1.0f / edgeStepX.z : 0.0f);
-	}
+	// Per-row analytic span bounds were removed: with the SIMD coverage test below they cost more than they saved.
 
 	for (int32_t y = a.start.y; y <= a.end.y; ++y)
 	{
-		int32_t xBegin = a.start.x;
-		int32_t xEnd = a.end.x;
-
-		if (useRowSpans)
-		{
-			const float py = static_cast<float>(y) + 0.5f;
-			bool emptyRow = false;
-
-			for (int i = 0; i < 3; ++i)
-			{
-				const float c = edgeStepY[i] * (py - edgeOriginY[i]);
-				const float slope = edgeStepX[i];
-				if (slope == 0.0f)
-				{
-					emptyRow |= c < 0.0f;
-					continue;
-				}
-
-				const float boundary = edgeOriginX[i] - c * edgeInvStepX[i] - 0.5f;
-				if (!(std::abs(boundary) < 1.0e5f))
-					continue;
-
-				const int32_t b = static_cast<int32_t>(boundary);
-				if (slope > 0.0f)
-					xBegin = std::max(xBegin, b - 2);
-				else
-					xEnd = std::min(xEnd, b + 3);
-			}
-
-			if (emptyRow)
-				continue;
-		}
-
 		const float rowY = static_cast<float>(y) + 0.5f;
 		const float rowEdge0 = edgeStepY.x * (rowY - edgeOriginY.x);
 		const float rowEdge1 = edgeStepY.y * (rowY - edgeOriginY.y);
 		const float rowEdge2 = edgeStepY.z * (rowY - edgeOriginY.z);
 
-		for (int32_t x = xBegin; x <= xEnd; ++x)
+		const glm::vec3 rowEdge(rowEdge0, rowEdge1, rowEdge2);
+		for (int32_t groupX = a.start.x; groupX <= a.end.x; groupX += 4)
 		{
+		const int32_t lanes = std::min(a.end.x - groupX + 1, 4);
+		uint32_t covered = coverMask4(groupX, edgeStepX, edgeOriginX, rowEdge, edgeBias) & ((1u << lanes) - 1u);
+		while (covered != 0)
+		{
+			const int32_t x = groupX + static_cast<int32_t>(std::countr_zero(covered));
+			covered &= covered - 1;
+
 			const float pixelX = static_cast<float>(x) + 0.5f;
 			const float edge0 = edgeStepX.x * (pixelX - edgeOriginX.x) + rowEdge0;
 			const float edge1 = edgeStepX.y * (pixelX - edgeOriginX.y) + rowEdge1;
 			const float edge2 = edgeStepX.z * (pixelX - edgeOriginX.z) + rowEdge2;
-
-			if (edge0 < edgeBias.x || edge1 < edgeBias.y || edge2 < edgeBias.z)
-				continue;
 
 			const float w0 = edge0 * weightScale;
 			const float w1 = edge1 * weightScale;
@@ -479,6 +470,7 @@ void rasterizeTriangleImpl(const RasterArgs& a)
 
 			if (a.state.depthWrite)
 				depthBuffer->at(glm::uvec2(x, y)).x = depth;
+		}
 		}
 	}
 }

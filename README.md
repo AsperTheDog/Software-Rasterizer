@@ -76,7 +76,7 @@ All numbers are per frame at 1920x1080 rendering to an sRGB target and presentin
 | Helmet (PBR) | 15,452 | 1 | 0.49 ms | 0.14 ms | 10.44 ms | 12.47 ms | 80.2 |
 | Sponza (PBR) | 262,267 | 2 | 2.22 ms | 1.15 ms | 61.06 ms | 65.97 ms | 15.2 |
 | Bistro (PBR) | 2,828,266 | 2 | 26.71 ms | 7.94 ms | 70.96 ms | 106.85 ms | 9.4 |
-| Hairball (PBR) | 2,850,000 | 1 | 8.04 ms | 8.25 ms | 42.66 ms | 60.13 ms | 16.6 |
+| Hairball (PBR) | 2,850,000 | 1 | 8.04 ms | 8.25 ms | 37.2 ms | 55.0 ms | 18.2 |
 | Cubes (instanced) | 1,500 | 1 | 0.56 ms | 0.16 ms | 14.11 ms | 16.46 ms | 60.8 |
 | Torus knot | 9,216 | 1 | 0.58 ms | 0.13 ms | 5.49 ms | 7.54 ms | 132.6 |
 | Terrain | 73,728 | 1 | 0.58 ms | 0.38 ms | 8.18 ms | 10.52 ms | 95.1 |
@@ -132,7 +132,7 @@ Properties: bistro.glb, 1920x1080 sRGB target, 2,828,266 triangles in 2 draw bat
 
 Capture of the hairball model using the same PBR pipeline and scene system, a stress test for binning and rasterization since it is made of millions of thin triangles.
 
-Properties: hairball.glb, 1920x1080 sRGB target, 2,850,000 triangles in 1 draw batch, camera at (1.8, 1.15, 2.7). Performance: 60.13 ms per frame (16.6 fps), 8.04 ms in the vertex stage, 8.25 ms in binning and 42.66 ms in the fragment stage.
+Properties: hairball.glb, 1920x1080 sRGB target, 2,850,000 triangles in 1 draw batch, camera at (1.8, 1.15, 2.7). Performance: 55.0 ms per frame (18.2 fps), 8.04 ms in the vertex stage, 8.25 ms in binning and 37.2 ms in the fragment stage.
 
 ---
 

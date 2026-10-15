@@ -392,6 +392,7 @@ void Renderer::threadRunBinning(const uint32_t threadID)
 		if (instanced)
 			triangleInstances[triID] = info.instance;
 
+		// Tried an exact triangle-vs-tile edge test here with no net frame gain on Hairball
 		for (int32_t y = tileMin.y; y <= tileMax.y; ++y)
 		{
 			for (int32_t x = tileMin.x; x <= tileMax.x; ++x)
@@ -457,6 +458,7 @@ void Renderer::threadRunBinning(const uint32_t threadID)
 			const DrawInfo& info = *cachedInfo;
 			const uint32_t localTri = nextTri - info.triBase;
 
+			// Tried prefetching upcoming triangles' vertices and clipcodes here: no gain on Hairball.
 			uint32_t slot[3];
 			if (info.indexData != nullptr)
 			{
@@ -586,6 +588,7 @@ void Renderer::threadRunFragment()
 		for (const BinNode node : localBinNodes)
 		{
 			const TriangleVertices& tv = triangleVertices[node];
+			// Tried hoisting this setup to emit time, Hairball binning cost outweighed the savings.
 			const VOutBase* v1 = resolveVertex(tv.v[0], vOutStride);
 			const VOutBase* v2 = resolveVertex(tv.v[1], vOutStride);
 			const VOutBase* v3 = resolveVertex(tv.v[2], vOutStride);
