@@ -107,6 +107,7 @@ void Renderer::execute(const CommandBuffer& commandBuffer)
 				totalTriangles = triangles;
 				totalVertices = vertices;
 				triangleUniforms.resize(triangles);
+				triangleVertices.resize(static_cast<size_t>(triangles) * 2);
 				if (currentPipeline->instanced)
 					triangleInstances.resize(triangles);
 				const uint32_t binNodeDemand = std::min(binNodesPerTile * tileCount + binNodesPerTriangle * triangles, maxBinNodes);
@@ -360,7 +361,7 @@ void Renderer::threadRunBinning(const uint32_t threadID)
 		return idx | CULL_BIT;
 	};
 
-	const auto emitTriangle = [&](const uint32_t triID, const DrawInfo& info, const uint32_t sa, const uint32_t sb, const uint32_t sc)
+	const auto emitTriangle = [&](const uint32_t triID, const DrawInfo& info, const uint32_t sub, const uint32_t sa, const uint32_t sb, const uint32_t sc)
 	{
 		const VOutBase* a = resolveVertex(sa, vOutStride);
 		const VOutBase* b = resolveVertex(sb, vOutStride);
@@ -385,6 +386,8 @@ void Renderer::threadRunBinning(const uint32_t threadID)
 		const glm::ivec2 tileMin = glm::min(glm::ivec2(pxMin) >> 4, maxTileIndex);
 		const glm::ivec2 tileMax = glm::min(glm::ivec2(pxMax) >> 4, maxTileIndex);
 
+		const BinNode node = (triID << 1) | sub;
+		triangleVertices[node] = { { sa, sb, sc } };
 		triangleUniforms[triID] = info.uniform;
 		if (instanced)
 			triangleInstances[triID] = info.instance;
@@ -417,7 +420,7 @@ void Renderer::threadRunBinning(const uint32_t threadID)
 				}
 
 				BinChunk& chunk = binningScratchpad[head];
-				chunk.nodes[chunk.count++] = BinNode{ triID, { sa, sb, sc } };
+				chunk.nodes[chunk.count++] = node;
 			}
 		}
 	};
@@ -477,7 +480,7 @@ void Renderer::threadRunBinning(const uint32_t threadID)
 
 			if (((c0 | c1 | c2) & CLIP_NEAR_PLANE) == 0)
 			{
-				emitTriangle(nextTri, info, slot[0], slot[1], slot[2]);
+				emitTriangle(nextTri, info, 0, slot[0], slot[1], slot[2]);
 				continue;
 			}
 
@@ -515,7 +518,7 @@ void Renderer::threadRunBinning(const uint32_t threadID)
 				}
 			}
 			for (uint32_t k = 1; k + 1 < polyCount; ++k)
-				emitTriangle(nextTri, info, poly[0], poly[k], poly[k + 1]);
+				emitTriangle(nextTri, info, k - 1, poly[0], poly[k], poly[k + 1]);
 		}
 	}
 }
@@ -559,7 +562,7 @@ void Renderer::threadRunFragment()
 			runEnds.push_back(localBinNodes.size());
 		}
 
-		const auto byTriangle = [](const BinNode& a, const BinNode& b) { return a.triangleID < b.triangleID; };
+		const auto byTriangle = [](const BinNode& a, const BinNode& b) { return a < b; };
 		while (runEnds.size() > 1)
 		{
 			mergeScratch.resize(localBinNodes.size());
@@ -580,11 +583,12 @@ void Renderer::threadRunFragment()
 		const PipelineState& state = currentPipeline->state;
 		auto rasterize = currentPipeline->rasterizeTriangle;
 
-		for (const BinNode& node : localBinNodes)
+		for (const BinNode node : localBinNodes)
 		{
-			const VOutBase* v1 = resolveVertex(node.v[0], vOutStride);
-			const VOutBase* v2 = resolveVertex(node.v[1], vOutStride);
-			const VOutBase* v3 = resolveVertex(node.v[2], vOutStride);
+			const TriangleVertices& tv = triangleVertices[node];
+			const VOutBase* v1 = resolveVertex(tv.v[0], vOutStride);
+			const VOutBase* v2 = resolveVertex(tv.v[1], vOutStride);
+			const VOutBase* v3 = resolveVertex(tv.v[2], vOutStride);
 
 			const glm::vec2 p1 = glm::vec2(v1->position);
 			const glm::vec2 p2 = glm::vec2(v2->position);
@@ -627,8 +631,8 @@ void Renderer::threadRunFragment()
 				.v1 = v1,
 				.v2 = v2,
 				.v3 = v3,
-				.uniform = triangleUniforms[node.triangleID],
-				.instance = instanced ? triangleInstances[node.triangleID] : nullptr,
+				.uniform = triangleUniforms[node >> 1],
+				.instance = instanced ? triangleInstances[node >> 1] : nullptr,
 				.framebuffers = batch.framebuffers.data(),
 				.depthBuffer = batch.depthBuffer,
 				.start = start,

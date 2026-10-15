@@ -43,12 +43,14 @@ public:
 private:
 	enum class Phase: uint8_t { Idle, Vertex, Binning, Fragment, Shutdown, Compute, Clear };
 
-	struct BinNode {
-		uint32_t triangleID;
+	// A bin node is (triangleID << 1) | subTriangle, an index into triangleVertices.
+	// Near-plane clipping yields at most two sub-triangles per source triangle.
+	using BinNode = uint32_t;
+	struct TriangleVertices {
 		uint32_t v[3];
 	};
 
-	static constexpr uint32_t kNodesPerChunk = 7;
+	static constexpr uint32_t kNodesPerChunk = 30;
 	struct alignas(128) BinChunk {
 		uint32_t next;
 		uint32_t count;
@@ -105,6 +107,7 @@ private:
 	uint32_t totalTriangles = 0;
 	uint32_t totalVertices = 0;
 	std::vector<VertexStart> vertexStarts;
+	std::vector<TriangleVertices> triangleVertices;
 	std::vector<const void*> triangleUniforms;
 	std::vector<const void*> triangleInstances;
 
